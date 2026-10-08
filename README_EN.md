@@ -52,6 +52,15 @@
 
 **Prerequisite**: DSH installed and running (`dsh web` works), Node.js ≥ 18, pnpm ≥ 9.
 
+**Version pairing (important)**: check `dsh --version` and install the matching plugin version.
+
+| DSH version | Plugin version |
+|---|---|
+| 0.1.x | `@xxxyz/dsh-mcp-manager@2.2.x` |
+| 0.2.x (since `0.2.0-rc.2`) | `@xxxyz/dsh-mcp-manager@2.3.0` or later |
+
+Since 0.2.0-rc.2 DSH **validates plugin compatibility**: install and boot compare the DSH ranges declared in the plugin's `peerDependencies` against `dsh --version` and refuse a mismatch. 2.3.0 declares 0.2.0-rc.2 and installs cleanly; 2.2.7 and earlier are rejected on 0.2.0-rc.2 (see the FAQ below).
+
 ### Method 1 · dsh command (recommended)
 
 One command installs the package and **auto-mounts** it (the `dsh.bundle.patch` mechanism — no manual config file edits needed):
@@ -92,6 +101,9 @@ Or bump the version in `~/.dsh/profiles/web/package.json` and run `pnpm install`
 | `dsh: command not found` | Install DSH first, or use `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add @xxxyz/dsh-mcp-manager@latest`. |
 | `npm view` reports 404 | Local mirror (npmmirror) sync lag: add `--registry=https://registry.npmjs.org` or wait a moment. |
 | Config changes don't take effect | All changes apply via HMR within 1–2 s; the page auto-polls. |
+| `dsh: installation rejected: Plugin @xxxyz/dsh-mcp-manager@2.2.7 is incompatible with dsh 0.2.0-rc.2` | The plugin and DSH versions do not match: use `@2.2.x` on DSH 0.1.x and `@2.3.0`+ on DSH 0.2.x. Do **not** grant an `allow-version` exemption to the old release: 2.2.7 writes MCP config into the wrong profile file on 0.2.x and shows an incomplete skill list. |
+| After upgrading DSH to 0.2.x the paths/list in "MCP 管理" look wrong (writes go to the web profile, only `include:` rows are listed) | 2.2.7 guessed the DSH home from `settings.prepareDocument()`, whose semantics changed in 0.2.0. 2.3.0 reads the runtime `profileContext` instead, so paths always follow the active profile. Upgrade to `@2.3.0`. |
+| My own skills are missing from the list | User-level skills come from `~/.dsh/skills` and are grouped under the `user-dsh` source. They are **view-only**; to disable one, edit `user-invocable` in its `SKILL.md`. |
 
 </details>
 
@@ -118,7 +130,7 @@ Open **Settings → MCP 管理**:
 Open **Settings → Skills 管理**:
 
 - **Browse / Search**: lists every DSH skill grouped by source (project / runtime / custom / user / built-in / plugin-bundled), collapsed per provider; the search box filters live. User-level skills under `~/.dsh/skills/` (2.2.0+) are listed too — even though the official scoped layer never exposes them to scope-less queries.
-- **Enable / Disable**: toggle any skill in one click — implemented with a rank-0 override provider (`dsh-mcp-manager-override`), so every source level (including project-level and user-level filesystem skills) can be disabled.
+- **Enable / Disable**: toggle a skill in one click — implemented with a rank-0 override provider (`dsh-mcp-manager-override`). User-level (`user-dsh`) skills are owned by the DSH filesystem and are **view-only**: to disable one, edit `user-invocable` in its `SKILL.md`.
 - **Persistence**: disabled state is written to `<profileDir>/dsh-skill-manager.json`, survives restarts, and applies live via HMR.
 
 ## ⚙️ Configuration

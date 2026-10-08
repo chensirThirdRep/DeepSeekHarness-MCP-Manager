@@ -51,6 +51,15 @@
 
 **前置**：已装好 DSH（`dsh web` 能正常运行），Node.js ≥ 18、pnpm ≥ 9。
 
+**版本对应（重要）**：用 `dsh --version` 确认 DSH 版本，再装对应插件版本。
+
+| DSH 版本 | 应装插件版本 |
+|---|---|
+| 0.1.x | `@xxxyz/dsh-mcp-manager@2.2.x` |
+| 0.2.x（`0.2.0-rc.2` 起） | `@xxxyz/dsh-mcp-manager@2.3.0` 及以上 |
+
+DSH 自 0.2.0-rc.2 起新增**插件兼容性校验**：安装与启动时按插件 `peerDependencies` 声明的 DSH 版本范围比对 `dsh --version`，不匹配直接拒绝安装。2.3.0 声明的是 0.2.0-rc.2，可直接安装；2.2.7 及更早版本在 0.2.0-rc.2 上会被拒（见下方常见问题）。
+
 ### 方式一 · dsh 命令安装（推荐）
 
 一条命令装包 + **自动挂载**（`dsh.bundle.patch` 机制，无需手动改任何配置文件）：
@@ -91,6 +100,9 @@ dsh plugin --profile web add @xxxyz/dsh-mcp-manager@latest
 | 提示 `dsh: command not found` | 先安装 DSH；或直接用 `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add @xxxyz/dsh-mcp-manager@latest`。 |
 | `npm view` 报 404 | 国内镜像（npmmirror）同步有延迟：加 `--registry=https://registry.npmjs.org` 或稍等再试。 |
 | 修改配置后未生效 | 所有修改走 HMR 热应用，等 1–2 秒自动刷新；页面会自动轮询。 |
+| 安装报 `dsh: installation rejected: Plugin @xxxyz/dsh-mcp-manager@2.2.7 is incompatible with dsh 0.2.0-rc.2` | 插件版本与 DSH 版本不匹配：DSH 0.1.x 用 `@2.2.x`，DSH 0.2.x 用 `@2.3.0` 及以上。**不要**用 `allow-version` 豁免旧版：2.2.7 在 0.2.x 下会把 MCP 配置写到错误的 profile 文件、技能列表也不完整。 |
+| DSH 升到 0.2.x 后「MCP 管理」里路径/列表不对（写进了 web profile、只列出 `include:` 行） | 2.2.7 依赖 `settings.prepareDocument()` 猜 DSH 主目录，0.2.0 改了该接口语义。2.3.0 改为读取运行时 `profileContext`，路径始终对准当前活动 profile；升级到 `@2.3.0` 即可。 |
+| 技能列表里少了自己的技能 | 用户级技能来自 `~/.dsh/skills`；列表按来源分组显示（用户级标记为 `user-dsh`）。用户级技能**只读**，要停用请直接改 `SKILL.md` 的 `user-invocable`。 |
 
 </details>
 
@@ -117,7 +129,7 @@ dsh plugin --profile web remove @xxxyz/dsh-mcp-manager
 打开 **设置 → Skills 管理**：
 
 - **浏览 / 搜索**：列出 DSH 全部技能，按来源分组（项目级 / 运行时 / 自定义 / 用户级 / 内置 / 插件自带），组内按 provider 折叠；搜索框实时过滤。`~/.dsh/skills/` 下的用户级技能（2.2.0+）同样可见——即使官方 scoped 层不向无 scope 查询暴露它们。
-- **启用 / 停用**：一键切换任意技能的启用状态——通过 rank-0 override provider（`dsh-mcp-manager-override`）实现，任何来源层级（含项目级与用户级文件系统技能）都能禁用。
+- **启用 / 停用**：一键切换技能启用状态——通过 rank-0 override provider（`dsh-mcp-manager-override`）实现。用户级（`user-dsh`）技能由 DSH 文件系统管理，**仅支持查看**：如需停用请直接编辑其 `SKILL.md` 的 `user-invocable` 字段。
 - **持久化**：停用状态写入 `<profileDir>/dsh-skill-manager.json`，重启后保留；改动经 HMR 即时生效。
 
 ## ⚙️ 配置

@@ -427,54 +427,131 @@ export default {
     }
 
     // ---------- path discovery ----------
-    // Known limitation: profile detection probes 'web' then 'headless' by
-    // presence of profiles/<name>/cordis.patch.yml, then falls back to any
-    // profile that has one, and finally to 'web'. A profile whose directory
-    // name matches none of these and has no patch file yet is not detected.
-    let cached: { home: string; profileDir: string; profileName: string; projectPatch: string; globalPatch: string } | null = null
-    async function ensurePaths() {
-      if (cached) return cached
-      let home: string | null = null
-      try {
-        const doc = await settings.prepareDocument()
-        if (typeof doc === 'string' && doc) {
-          const i = Math.max(doc.lastIndexOf('\\'), doc.lastIndexOf('/'))
-          home = i > 0 ? doc.slice(0, i) : doc
-        }
-      } catch (e) { /* ignore */ }
-      if (!home) throw new Error('无法确定 DSH 主目录（settings.prepareDocument 未返回路径）')
-      const sep = home.indexOf('\\') >= 0 ? '\\' : '/'
-      let profileDir: string | null = null
-      let profileName = 'web'
-      for (const name of ['web', 'headless']) {
-        if (await exists(home + sep + 'profiles' + sep + name + sep + 'cordis.patch.yml')) {
-          profileDir = home + sep + 'profiles' + sep + name
-          profileName = name
-          break
-        }
-      }
-      if (!profileDir) {
-        try {
-          const t = await fs.resolve(home + sep + 'profiles')
-          const entries = await fs.listDir(t)
-          for (const e of entries) {
-            if (e.name === 'node_modules') continue
-            if (await exists(home + sep + 'profiles' + sep + e.name + sep + 'cordis.patch.yml')) {
-              profileDir = home + sep + 'profiles' + sep + e.name
-              profileName = e.name
-              break
-            }
-          }
-        } catch (e) { /* ignore */ }
-      }
-      if (!profileDir) profileDir = home + sep + 'profiles' + sep + 'web'
-      cached = {
+    // DSH 0.2.0-rc.2 boots the app with a 'profileContext' service describing the
+    // ACTIVE profile (name / dir / patchPath / home). The profile patch file it
+    // reports is the document this plugin edits, so read it from there first and
+    // only probe the directory tree when that service is unavailable. The probe
+    // chain prefers the active profile ($DSH_PROFILE, $DSH_PROFILE_DIR) over the
+    // legacy 'web' / 'headless' order, so running under desktop or a custom
+    // profile no longer edits web's file.
+    // NOTE (0.2.0): settings.prepareDocument() now returns the active profile's
+    // cordis.patch.yml instead of $DSH_HOME/settings.yaml; a document that IS a
+    // patch file is therefore handled as the profile document it now is.
+    type Paths = {
+      home: string
+      profileDir: string
+      profileName: string
+      projectPatch: string
+      globalPatch: string
+    }
+    interface ProfileContextService {
+      name?: string
+      dir?: string
+      patchPath?: string
+      home?: string
+    }
+    function pathSep(value: string): string {
+      return value.indexOf('\\') >= 0 ? '\\' : '/'
+    }
+    function dirOf(abs: string): string {
+      const i = Math.max(abs.lastIndexOf('\\'), abs.lastIndexOf('/'))
+      return i > 0 ? abs.slice(0, i) : abs
+    }
+    function baseOf(abs: string): string {
+      const trimmed = abs.replace(/[\\/]+$/, '')
+      const i = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'))
+      return i >= 0 ? trimmed.slice(i + 1) : trimmed
+    }
+    function joinPath(dir: string, ...parts: string[]): string {
+      return [dir.replace(/[\\/]+$/, ''), ...parts].join(pathSep(dir))
+    }
+    function isPatchFile(abs: string): boolean {
+      return /[\\/]cordis\.patch\.ya?ml$/i.test(abs)
+    }
+    // <home>/profiles/<name> -> <home>
+    function homeOfProfileDir(profileDir: string): string {
+      const parent = dirOf(profileDir)
+      return /[\\/]profiles$/i.test(parent) ? dirOf(parent) : parent
+    }
+    function pathsFor(home: string, profileDir: string, profileName: string, projectPatch?: string): Paths {
+      return {
         home,
         profileDir,
         profileName,
-        projectPatch: profileDir + sep + 'cordis.patch.yml',
-        globalPatch: home + sep + 'cordis.patch.yml',
+        projectPatch: projectPatch || joinPath(profileDir, 'cordis.patch.yml'),
+        globalPatch: joinPath(home, 'cordis.patch.yml'),
       }
+    }
+    function pathsFromProfileContext(): Paths | null {
+      let pc: ProfileContextService | undefined
+      try { pc = ctx.get('profileContext') as ProfileContextService | undefined } catch (e) { pc = undefined }
+      if (!pc) return null
+      const patchPath = typeof pc.patchPath === 'string' && pc.patchPath ? pc.patchPath : ''
+      if (!patchPath) return null
+      const profileDir = typeof pc.dir === 'string' && pc.dir ? pc.dir : dirOf(patchPath)
+      const home = typeof pc.home === 'string' && pc.home ? pc.home : homeOfProfileDir(profileDir)
+      const profileName = typeof pc.name === 'string' && pc.name ? pc.name : baseOf(profileDir)
+      return pathsFor(home, profileDir, profileName, patchPath)
+    }
+    // $DSH_PROFILE_DIR is only trusted when it belongs to the DSH home this
+    // resolution already settled on, so an inherited value from another
+    // installation cannot redirect writes into a different profile tree.
+    function sameDir(a: string, b: string): boolean {
+      return a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
+    }
+    // Directory probe, used only when neither the runtime service nor the
+    // environment names the active profile.
+    async function detectProfileDir(home: string): Promise<string | null> {
+      const ordered: string[] = []
+      const seen = new Set<string>()
+      const push = (dir: string) => { if (dir && !seen.has(dir)) { seen.add(dir); ordered.push(dir) } }
+      const fromEnv = String(process.env.DSH_PROFILE || '').trim()
+      const fromEnvDir = String(process.env.DSH_PROFILE_DIR || '').trim()
+      if (fromEnv) push(joinPath(home, 'profiles', fromEnv))
+      if (fromEnvDir && sameDir(homeOfProfileDir(fromEnvDir), home)) push(fromEnvDir)
+      for (const name of ['web', 'headless']) push(joinPath(home, 'profiles', name))
+      const profilesRoot = joinPath(home, 'profiles')
+      try {
+        const root = await fs.resolve(profilesRoot)
+        const entries = await fs.listDir(root)
+        for (const e of entries.slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+          if (e.name === 'node_modules') continue
+          push(joinPath(profilesRoot, e.name))
+        }
+      } catch (e) { /* ignore */ }
+      for (const dir of ordered) {
+        if (await exists(joinPath(dir, 'cordis.patch.yml'))) return dir
+      }
+      // No profile has a patch file yet: an existing profile directory is still
+      // the best answer (a freshly created profile may not have one).
+      for (const dir of ordered) {
+        if (await exists(dir)) return dir
+      }
+      return null
+    }
+    let cached: Paths | null = null
+    async function ensurePaths(): Promise<Paths> {
+      if (cached) return cached
+      const fromRuntime = pathsFromProfileContext()
+      if (fromRuntime) { cached = fromRuntime; return cached }
+      // The settings document stays the second source: on 0.1.x it is
+      // $DSH_HOME/settings.yaml (whose directory IS the DSH home), and on 0.2.0
+      // without a profile context it is the active profile's patch file.
+      let doc = ''
+      try {
+        const d = await settings.prepareDocument()
+        if (typeof d === 'string' && d) doc = d
+      } catch (e) { /* ignore */ }
+      if (isPatchFile(doc)) {
+        const profileDir = dirOf(doc)
+        cached = pathsFor(homeOfProfileDir(profileDir), profileDir, baseOf(profileDir), doc)
+        return cached
+      }
+      const home = doc ? dirOf(doc) : String(process.env.DSH_HOME || '').trim()
+      if (!home) throw new Error('无法确定 DSH 主目录（运行时未提供 profileContext，settings.prepareDocument 也未返回路径）')
+      const profileDir = await detectProfileDir(home)
+      if (!profileDir) throw new Error('无法确定当前 profile 的配置文件（未在 ' + joinPath(home, 'profiles') + ' 下找到任何 profile 目录）')
+      cached = pathsFor(home, profileDir, baseOf(profileDir))
       return cached
     }
 

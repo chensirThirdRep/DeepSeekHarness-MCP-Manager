@@ -9,3 +9,13 @@ Thumbs.db
 
 # Local-only release tooling (scripts/release-notes.mjs + releases.json)
 scripts/
+
+# Local probe/verification scratch (never committed)
+.tmp-probe/
+.npm-cache/
+
+# graphflow local artifacts
+.graphflow/
+.graphflow-cache/
+graphflow-out/
+
