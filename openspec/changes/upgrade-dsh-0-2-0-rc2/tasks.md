@@ -31,10 +31,10 @@
 - [x] 5.4 技能：列表（3 条：1 内置 + 2 用户级）/ 启停 / 持久化（重启后仍停用，状态文件 `<profileDir>/dsh-skill-manager.json`）/ 用户级只读拒绝；搜索为前端行为，见 5.7
 - [x] 5.5 路径：`paths.project` 指向活动 profile（`mcpman-dev`）、`paths.home` 为 `~/.dsh`、`paths.profile` 为 `mcpman-dev`
 - [x] 5.6 写入安全：每次写操作后核对目标文件与其他层级文件（停用→启用后 SHA256 一致；web profile 文件未被改动）
-- [ ] 5.7 页面：设置页「MCP 管理」「Skills 管理」渲染与操作人工确认
-- [x] 5.8 证据归档：请求/响应与哈希存入 `.tmp-probe/evidence/`
+- [x] 5.7 页面：设置页「MCP 管理」「Skills 管理」渲染与操作人工确认（用户确认：页面正常渲染、可操作、无双页签）
+- [x] 5.8 证据归档：`openspec/changes/upgrade-dsh-0-2-0-rc2/evidence/`（2.2.7 失败证据 + 2.3.0 通过证据 + 4 个采集脚本 + 说明）
 
 ## 6. 收尾
 
-- [ ] 6.1 清理临时目录与后台实例，确认 `.gitignore` 覆盖
-- [ ] 6.2 提交到分支 `feat/dsh-0.2.0-rc2`（不发布 npm、不 archive change）
+- [x] 6.1 清理临时目录（`.tmp-probe/`、`.npm-cache/` 已删除；验证实例已停止；`.gitignore` 已覆盖）
+- [x] 6.2 提交到分支 `feat/dsh-0.2.0-rc2`（不发布 npm、不 archive change）

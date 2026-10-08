@@ -1,0 +1,95 @@
+{
+  "ok": true,
+  "rows": [
+    {
+      "id": "mcp-mcpman-probe",
+      "serverName": "mcpman-probe",
+      "transport": "stdio",
+      "url": null,
+      "command": "node --version",
+      "args": [
+        "--check"
+      ],
+      "env": {
+        "PROBE": "1"
+      },
+      "headers": null,
+      "level": "project",
+      "disabled": false,
+      "managed": true,
+      "toolCount": 0
+    },
+    {
+      "id": "cmhub-mcp-gcp",
+      "serverName": "gcp",
+      "transport": "streamable-http",
+      "url": "https://mcp.netease.com/servers/gcp/mcp",
+      "command": null,
+      "args": null,
+      "env": null,
+      "headers": {
+        "Accept": "application/json, text/event-stream",
+        "gcp-host": "sdk.pm.netease.com",
+        "gcp-user-key": "gk_2c5dd2b865b648739fc16120a83a838f"
+      },
+      "level": "global",
+      "disabled": false,
+      "managed": false,
+      "live": {
+        "enabled": true,
+        "phase": "active"
+      },
+      "toolCount": 78
+    },
+    {
+      "id": "cmhub-mcp-web-search",
+      "serverName": "web-search",
+      "transport": "streamable-http",
+      "url": "https://outer-websearch-mcp-dep356-iserving.tmax.netease.com/mcp",
+      "command": null,
+      "args": null,
+      "env": null,
+      "headers": null,
+      "level": "global",
+      "disabled": false,
+      "managed": false,
+      "live": {
+        "enabled": true,
+        "phase": "active"
+      },
+      "toolCount": 3
+    },
+    {
+      "id": "mcp-graphflow",
+      "serverName": "graphflow",
+      "transport": "stdio",
+      "url": null,
+      "command": "npx",
+      "args": [
+        "-y",
+        "--package=@roarpeng/graphflow",
+        "graphflow-mcp"
+      ],
+      "env": {
+        "GRAPHFLOW_MCP_STDIO": "1",
+        "GRAPHFLOW_LOG_JSON": "1"
+      },
+      "headers": null,
+      "level": "global",
+      "disabled": false,
+      "managed": false,
+      "live": {
+        "enabled": true,
+        "phase": "active"
+      },
+      "toolCount": 10
+    }
+  ],
+  "paths": {
+    "project": "C:\\Users\\chenjunhao04\\.dsh\\profiles\\mcpman-dev\\cordis.patch.yml",
+    "global": "C:\\Users\\chenjunhao04\\.dsh\\cordis.patch.yml",
+    "home": "C:\\Users\\chenjunhao04\\.dsh",
+    "profile": "mcpman-dev"
+  },
+  "errors": []
+}

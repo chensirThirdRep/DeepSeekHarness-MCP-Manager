@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "row": {
+    "id": "mcp-mcpman-probe",
+    "serverName": "mcpman-probe",
+    "transport": "stdio",
+    "command": "node --version",
+    "args": [
+      "--check"
+    ],
+    "env": {
+      "PROBE": "1"
+    },
+    "level": "project",
+    "disabled": false
+  }
+}

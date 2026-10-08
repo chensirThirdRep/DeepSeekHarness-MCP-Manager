@@ -1,0 +1,44 @@
+--- 1. plugin-version
+   status=200 version=2.3.0
+   patch sha(before)=ABSENT
+--- 2. mcpm-list
+   ok=true rows=3 errors=[]
+   paths={"project":"C:\\Users\\chenjunhao04\\.dsh\\profiles\\mcpman-dev\\cordis.patch.yml","global":"C:\\Users\\chenjunhao04\\.dsh\\cordis.patch.yml","home":"C:\\Users\\chenjunhao04\\.dsh","profile":"mcpman-dev"}
+   levels={"global":3}
+   configured(with transport)=cmhub-mcp-gcp/streamable-http/global, cmhub-mcp-web-search/streamable-http/global, mcp-graphflow/stdio/global
+   loader-only=
+--- 3. mcpm-tools
+   ok=false keys=["ok","error"] tools=0
+--- 4. mcpm-add (project level -> mcpman-dev patch)
+   ok=true err=undefined
+   patch sha(after add)=5a73a0e807edcdcc86c0d12dba791f391a2608c1869d18d6d247fc6112824d41 exists=true
+   patch head="\n# dsh-mcp-manager:server:mcp-mcpman-probe\n- insert:\n    - id: mcp-mcpman-probe\n      name: '@deepseek-ai/dsh-mcp-client"
+--- 5. mcpm-list sees the new server
+   probe row={"id":"mcp-mcpman-probe","serverName":"mcpman-probe","transport":"stdio","url":null,"command":"node --version","args":["--check"],"env":{"PROBE":"1"},"headers":null,"level":"project","disabled":false,"managed":true,"toolCount":0}
+--- 6. mcpm-edit
+   ok=true err=undefined
+   probe row after edit={"id":"mcp-mcpman-probe","serverName":"mcpman-probe","transport":"streamable-http","url":"https://example.invalid/mcp","command":null,"args":null,"env":null,"headers":{"A":"b"},"level":"project","disabled":false,"managed":true,"toolCount":0}
+--- 7. mcpm-set-enabled round trip
+   disable ok=true
+   disabled flag=true
+   enable ok=true
+   sha round trip equal=true (422c1bbf588f vs 422c1bbf588f)
+--- 8. mcpm-restart
+   ok=true warning=undefined err=undefined
+--- 9. mcpm-export / mcpm-import
+   export ok=true chars=-1 keys=["ok","json","savedTo"]
+--- 10. mcpm-remove -> file restored
+   ok=true err=undefined
+   patch sha(after remove)=37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570 exists=true
+   patch content="[]\n"
+--- 11. skill-list
+   ok=true count=3 complete=true chars=30684
+   sources={"bundled":1,"user-dsh":2}
+   first10=diagnose-windows-sandbox-acl(bundled), graphflow(user-dsh), only-explain(user-dsh)
+--- 12. skill-toggle on a runtime skill (disable+enable)
+   disable diagnose-windows-sandbox-acl -> ok=true err=undefined
+   after disable: present=true disabled=undefined
+   enable -> ok=true err=undefined
+   after enable: present=true disabled=undefined
+--- 13. web page boot payload mentions the client half
+   status=401 len=68 mentionsPlugin=false mentionsClientJs=false
