@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-08
+goal: 让 MCP 管理页动态发现 DSH profile（global / 当前活动 profile / 任意
+  profile）并支持选择配置与查看范围，同时修复深色主题下表单控件与原生下拉弹层的浅色渲染

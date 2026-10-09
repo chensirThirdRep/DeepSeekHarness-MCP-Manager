@@ -1,0 +1,131 @@
+{
+  "change": "mcp-profile-targets-and-dark-ui",
+  "dsh": "0.2.0-rc.2",
+  "baseUrl": "http://127.0.0.1:19399",
+  "activeProfile": "mcpman-dev",
+  "probedProfile": "tui",
+  "patches": {
+    "active": "C:\\Users\\chenjunhao04\\.dsh\\profiles\\mcpman-dev\\cordis.patch.yml",
+    "probed": "C:\\Users\\chenjunhao04\\.dsh\\profiles\\tui\\cordis.patch.yml",
+    "global": "C:\\Users\\chenjunhao04\\.dsh\\cordis.patch.yml"
+  },
+  "checks": [
+    {
+      "name": "scope=all lists every profile under <home>/profiles",
+      "pass": true,
+      "detail": "mcpman-dev*, desktop, dsh-tui, tui, web"
+    },
+    {
+      "name": "node_modules is not treated as a profile",
+      "pass": true,
+      "detail": "mcpman-dev*, desktop, dsh-tui, tui, web"
+    },
+    {
+      "name": "scope=all echoes the requested scope and always includes the global layer",
+      "pass": true,
+      "detail": "profiles=5, levels=profile:web, global"
+    },
+    {
+      "name": "add into a foreign profile succeeds",
+      "pass": true,
+      "detail": "{\"id\":\"mcp-mcpmverify4\",\"level\":\"profile:tui\"}"
+    },
+    {
+      "name": "add returns the restart-to-take-effect notice",
+      "pass": true,
+      "detail": "已写入 profile \"tui\"，该 profile 需重启其 DSH 实例后生效"
+    },
+    {
+      "name": "foreign profile patch really contains the entry",
+      "pass": true,
+      "detail": "tui patch 217 -> 490 bytes"
+    },
+    {
+      "name": "active profile patch untouched by a foreign write",
+      "pass": true,
+      "detail": "ef0c07cb022c"
+    },
+    {
+      "name": "scope=all surfaces the entry written into another profile",
+      "pass": true,
+      "detail": "{\"level\":\"profile:tui\",\"profileName\":\"tui\",\"liveEligible\":false}"
+    },
+    {
+      "name": "scope=profile:tui shows the foreign entry",
+      "pass": true,
+      "detail": "{\"level\":\"profile:tui\",\"liveEligible\":false,\"toolCount\":0,\"profileName\":\"tui\"}"
+    },
+    {
+      "name": "foreign rows are not live-eligible and report no tool count",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "scope=active hides foreign entries",
+      "pass": true,
+      "detail": "scope=active, rows=3"
+    },
+    {
+      "name": "duplicate serverName inside the same namespace is rejected",
+      "pass": true,
+      "detail": "serverName \"mcpmverify4\" 已在 profile \"tui\" 中存在"
+    },
+    {
+      "name": "duplicate serverName in the global layer is rejected",
+      "pass": true,
+      "detail": "serverName \"gcp\" 已在 全局层 中存在"
+    },
+    {
+      "name": "global patch untouched by rejected writes",
+      "pass": true,
+      "detail": "679213a007af"
+    },
+    {
+      "name": "set-enabled on a foreign profile entry",
+      "pass": true,
+      "detail": "已更新 profile \"tui\"，该 profile 需重启其 DSH 实例后生效"
+    },
+    {
+      "name": "edit resolves the row through fromLevel and rewrites the foreign patch",
+      "pass": true,
+      "detail": "已更新 profile \"tui\"，该 profile 需重启其 DSH 实例后生效"
+    },
+    {
+      "name": "active profile still untouched after toggle + edit",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "restart is refused outside the running instance",
+      "pass": true,
+      "detail": "重启只适用于当前实例加载的层级；profile \"tui\" 的 MCP 服务请在其自身的 DSH 实例中重启"
+    },
+    {
+      "name": "unknown level is reported",
+      "pass": true,
+      "detail": "未知的层级: bogus"
+    },
+    {
+      "name": "unknown view scope is reported",
+      "pass": true,
+      "detail": "未知的查看范围: bogus"
+    },
+    {
+      "name": "unknown profile is reported",
+      "pass": true,
+      "detail": "未找到 profile \"does-not-exist\""
+    },
+    {
+      "name": "remove on a foreign profile entry",
+      "pass": true,
+      "detail": "已从 profile \"tui\" 中删除该条目，该 profile 需重启其 DSH 实例后生效"
+    },
+    {
+      "name": "all touched patches restored to their initial bytes",
+      "pass": true,
+      "detail": null
+    }
+  ],
+  "total": 23,
+  "failed": 0
+}
