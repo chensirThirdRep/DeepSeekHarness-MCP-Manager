@@ -83,7 +83,9 @@ test('mcpm-add (stdio) writes a well-formed insert block; mcpm-list reads it bac
   const row = r.json.rows.find((x) => x.id === 'mcp-github')
   assert.equal(row.serverName, 'github')
   assert.equal(row.transport, 'stdio')
-  assert.equal(row.level, 'project')
+  // Levels are canonicalised to 'profile:<name>' now ('project' stays accepted
+  // as an input alias meaning "the active profile").
+  assert.equal(row.level, 'profile:web')
   assert.deepEqual(row.args, ['--foo', 'bar'])
   assert.deepEqual(row.env, { TOKEN: 'abc' })
 })

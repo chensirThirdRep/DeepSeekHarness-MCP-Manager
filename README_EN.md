@@ -3,10 +3,10 @@
 <!-- Hero -->
 <div align="center">
   <b style="font-size: 1.15em;">Manage every MCP server and skill in DeepSeek Harness from one settings page — install, configure, monitor.</b><br /><br />
-  <code>server list</code> <code>add / edit / delete</code> <code>enable / disable</code> <code>restart</code> <code>tool-count health</code> <code>JSON export / import</code><br />
+  <code>server list</code> <code>add / edit / delete</code> <code>enable / disable</code> <code>restart</code> <code>tool-count health</code> <code>JSON export / import</code> <code>any-profile writes</code><br />
   <code>Skills browse / search / disable</code> <code>4 model tools</code> <code>HTTP API</code> <code>dsh plugin one-command</code><br /><br />
-  <b>Settings → MCP 管理</b> manages <code>@deepseek-ai/dsh-mcp-client</code> rows in your project-level and
-  global <code>cordis.patch.yml</code>; <b>Settings → Skills 管理</b> browses and disables skills from every
+  <b>Settings → MCP 管理</b> manages <code>@deepseek-ai/dsh-mcp-client</code> rows in the active profile, in any other
+  profile on this machine, and in the global <code>cordis.patch.yml</code>; <b>Settings → Skills 管理</b> browses and disables skills from every
   source — no hand-editing, every change applies live via HMR, survives restarts and upgrades.
 </div>
 
@@ -40,7 +40,9 @@
 - **➕ Add / ➖ Delete** — form-based (env / headers / args supported) with format and duplicate-name validation; one-click delete
 - **🔌 Enable / Disable** — flip at any time, tools hot-connect / hot-disconnect
 - **🔄 Restart** — disable + re-enable, reconnect and re-sync tools automatically
-- **💾 Persistence** — written to the **project-level** (`profiles/<profile>/cordis.patch.yml`) or **global** (`~/.dsh/cordis.patch.yml`) patch file; survives restarts; the file path is shown at the bottom of the page
+- **💾 Persistence** — written to **any profile** (`~/.dsh/profiles/<name>/cordis.patch.yml`, the active profile by default) or to the **global layer** (`~/.dsh/cordis.patch.yml`, applied to every profile and taking precedence); survives restarts; the file path is shown at the bottom of the page
+- **🎯 Dynamic profiles** — the level dropdown enumerates every profile under `~/.dsh/profiles` and marks the active one; writing into a profile that is not running reports "restart that profile's DSH instance to take effect"
+- **🎨 Theme aware** — form controls and the native dropdown popup follow the DSH light / dark theme and update as soon as the theme switches
 - **🩺 Health check** — live tool counts and loader phase per server, problems visible at a glance
 - **📦 Backup / Restore** — JSON export / import; merges new entries, skips existing ones
 - **🤖 Model tools** — four `mcp_manager_*` tools registered on the host, so the model can query and manage MCP servers directly
@@ -122,7 +124,9 @@ Then restart DSH.
 
 Open **Settings → MCP 管理**:
 
-- **Add a server**: enter `serverName` (unique, 1–32 chars of `[A-Za-z0-9_-]`), the transport and its fields (`streamable-http` → URL / headers; `stdio` → command / args / env), and the level (project / global). The form validates format and duplicate names.
+- **Add a server**: enter `serverName` (unique, 1–32 chars of `[A-Za-z0-9_-]`), the transport and its fields (`streamable-http` → URL / headers; `stdio` → command / args / env), and the level (the active profile by default; any profile on this machine or the global layer can be chosen). The form validates format and duplicate names.
+- **Level dropdown**: lists every profile under `~/.dsh/profiles` with the active profile first. Entries written into a profile that is not running never affect the current instance; the page reports "restart that profile's DSH instance to take effect" and hides the restart / tool-preview actions for those rows.
+- **View scope**: switch the list between the active profile, one specific profile, or all profiles (global-layer entries are always included).
 - Each card shows live status, the connection target and the tool count; you can **enable / disable**, **restart**, **edit** and **delete**.
 - **Backup / Restore**: export the configuration as JSON with one click, or paste JSON to import (merges new entries, skips existing ones).
 - The file path being edited is shown at the bottom of the page.

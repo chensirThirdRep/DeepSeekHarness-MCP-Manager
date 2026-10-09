@@ -444,6 +444,23 @@ export default {
       projectPatch: string
       globalPatch: string
     }
+    // A resolved write target: the global patch, the active profile's patch, or
+    // another profile's patch. `active` means "the running instance loads this
+    // file" (global always does; another profile's file does not until that
+    // profile's own instance restarts).
+    type PatchScope = 'global' | 'profile'
+    interface PatchTarget {
+      scope: PatchScope
+      profileName: string | null
+      abs: string
+      active: boolean
+    }
+    interface ProfileEntry {
+      name: string
+      dir: string
+      patch: string
+      active: boolean
+    }
     interface ProfileContextService {
       name?: string
       dir?: string
@@ -553,6 +570,83 @@ export default {
       if (!profileDir) throw new Error('无法确定当前 profile 的配置文件（未在 ' + joinPath(home, 'profiles') + ' 下找到任何 profile 目录）')
       cached = pathsFor(home, profileDir, baseOf(profileDir))
       return cached
+    }
+
+    // ---------- profile discovery & target resolution ----------
+    // DSH ships no "list profiles" API, so the list is built by enumerating
+    // <home>/profiles. Only real profile directories count: node_modules is the
+    // shared link farm, and a directory without package.json or cordis.patch.yml
+    // is not a profile. The active profile is always present in the result.
+    const PROFILE_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/
+    function profileNameOk(name: string): boolean {
+      return PROFILE_NAME_RE.test(name) && name !== 'node_modules'
+    }
+    async function listProfiles(p: Paths): Promise<ProfileEntry[]> {
+      const root = joinPath(p.home, 'profiles')
+      const out: ProfileEntry[] = []
+      let entries: Array<{ name?: string }> = []
+      try {
+        const resolved = await fs.resolve(root)
+        entries = (await fs.listDir(resolved)) as Array<{ name?: string }>
+      } catch (e) { entries = [] }
+      for (const e of entries) {
+        const name = String((e && e.name) || '')
+        if (!name || !profileNameOk(name)) continue
+        const dir = joinPath(root, name)
+        const patch = joinPath(dir, 'cordis.patch.yml')
+        const okDir = (await exists(patch)) || (await exists(joinPath(dir, 'package.json')))
+        if (!okDir) continue
+        out.push({ name, dir, patch, active: sameDir(dir, p.profileDir) })
+      }
+      if (!out.some((x) => x.active)) {
+        out.push({ name: p.profileName, dir: p.profileDir, patch: p.projectPatch, active: true })
+      }
+      out.sort((a, b) => (a.active === b.active ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.active ? -1 : 1))
+      return out
+    }
+    // level values: 'global' | 'profile:<name>' | 'project' (legacy) | undefined
+    function parseLevel(level: unknown): { kind: PatchScope; profileName: string | null } | { error: string } {
+      const raw = typeof level === 'string' ? level.trim() : ''
+      if (!raw || raw === 'project') return { kind: 'profile', profileName: null }
+      if (raw === 'global') return { kind: 'global', profileName: null }
+      if (raw.slice(0, 8) === 'profile:') {
+        const name = raw.slice(8).trim()
+        if (!profileNameOk(name)) return { error: '非法的 profile 名: ' + (name || raw) }
+        return { kind: 'profile', profileName: name }
+      }
+      return { error: '未知的层级: ' + raw }
+    }
+    async function resolveTarget(level: unknown): Promise<{ ok: true; target: PatchTarget } | { ok: false; error: string }> {
+      const p = await ensurePaths()
+      const parsed = parseLevel(level)
+      if ('error' in parsed) return { ok: false, error: parsed.error }
+      if (parsed.kind === 'global') {
+        return { ok: true, target: { scope: 'global', profileName: null, abs: p.globalPatch, active: true } }
+      }
+      if (!parsed.profileName || sameDir(parsed.profileName, p.profileName)) {
+        return { ok: true, target: { scope: 'profile', profileName: p.profileName, abs: p.projectPatch, active: true } }
+      }
+      const dir = joinPath(joinPath(p.home, 'profiles'), parsed.profileName)
+      if (!(await exists(dir))) {
+        return { ok: false, error: '未找到 profile "' + parsed.profileName + '"（' + dir + ' 不存在）' }
+      }
+      return {
+        ok: true,
+        target: { scope: 'profile', profileName: parsed.profileName, abs: joinPath(dir, 'cordis.patch.yml'), active: false },
+      }
+    }
+    // Canonical level string used in API payloads and the UI.
+    function levelOf(target: PatchTarget): string {
+      return target.scope === 'global' ? 'global' : 'profile:' + target.profileName
+    }
+    // Writes into a profile this instance does not load only take effect when
+    // that profile's own instance restarts; every such write says so.
+    function restartHint(target: PatchTarget, action: '写入' | '更新' | '删除' = '写入'): string | null {
+      if (target.scope !== 'profile' || target.active) return null
+      const head = action === '删除'
+        ? '已从 profile "' + target.profileName + '" 中删除该条目'
+        : '已' + action + ' profile "' + target.profileName + '"'
+      return head + '，该 profile 需重启其 DSH 实例后生效'
     }
 
     async function exists(abs: string): Promise<boolean> {
@@ -834,21 +928,26 @@ export default {
     }
 
     // ---------- shared state ----------
-    async function collectAll(): Promise<{ ids: Set<string>; serverNames: Set<string>; rows: Array<{ id: string; serverName: string; level: string; disabled: boolean }> }> {
+    // Uniqueness is scoped to the TARGET NAMESPACE: the destination patch plus
+    // the global patch (which every profile loads). Two different profiles may
+    // therefore hold the same serverName — that is what makes "copy this server
+    // into another profile" possible.
+    async function collectNamespace(target: PatchTarget): Promise<{ ids: Set<string>; serverNames: Set<string>; rows: Array<{ id: string; serverName: string; level: string; disabled: boolean }> }> {
       const p = await ensurePaths()
       const ids = new Set<string>()
       const serverNames = new Set<string>()
       const rows: Array<{ id: string; serverName: string; level: string; disabled: boolean }> = []
-      for (const level of ['project', 'global']) {
-        const abs = level === 'project' ? p.projectPatch : p.globalPatch
+      const files: Array<{ level: string; abs: string }> = [{ level: levelOf(target), abs: target.abs }]
+      if (!sameDir(target.abs, p.globalPatch)) files.push({ level: 'global', abs: p.globalPatch })
+      for (const f of files) {
         let content = ''
-        try { content = await readPatch(abs) } catch (e) { continue }
+        try { content = await readPatch(f.abs) } catch (e) { continue }
         const { rows: fileRows } = parseRows(content)
         for (const r of fileRows) {
           ids.add(r.id)
           const sn = r.config && r.config.serverName ? String(r.config.serverName) : r.id
           serverNames.add(sn)
-          rows.push({ id: r.id, serverName: sn, level, disabled: !!r.disabled })
+          rows.push({ id: r.id, serverName: sn, level: f.level, disabled: !!r.disabled })
         }
       }
       return { ids, serverNames, rows }
@@ -874,14 +973,13 @@ export default {
       }
     }
 
-    async function entryExists(id: string, level: string): Promise<boolean> {
-      const p = await ensurePaths()
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
+    async function entryExists(id: string, target: PatchTarget): Promise<boolean> {
       let content = ''
-      try { content = await readPatch(abs) } catch (e) { return false }
+      try { content = await readPatch(target.abs) } catch (e) { return false }
       const { rows } = parseRows(content)
       if (rows.some((r) => r.id === id)) return true
-      return (await liveEntry(id)) !== null
+      // Only files THIS instance loads have a loader state worth consulting.
+      return target.active ? (await liveEntry(id)) !== null : false
     }
 
     function normalizeRow(r: ManagedRow, level: string, abs: string) {
@@ -914,7 +1012,12 @@ export default {
       const serverName = String(it.serverName || '').trim()
       if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) return { ok: false, error: 'serverName 非法: ' + String(it.serverName) }
       const transport = it.transport === 'stdio' ? 'stdio' : 'streamable-http'
-      const level = it.level === 'global' ? 'global' : 'project'
+      // Keep the three-tier level form so an exported file can be re-imported
+      // into any profile ('global' | 'profile:<name>' | 'project' = active).
+      const rawLevel = String(it.level || '').trim()
+      const level = rawLevel === 'global' || rawLevel === 'project' || rawLevel.slice(0, 8) === 'profile:'
+        ? rawLevel
+        : 'project'
       const baseId = 'mcp-' + serverName.toLowerCase().replace(/[^a-z0-9-]/g, '-')
       const rawId = String(it.id || '').trim()
       const id = rawId && /^[A-Za-z0-9_.:@%+=/-]+$/.test(rawId) ? rawId : baseId
@@ -985,16 +1088,70 @@ export default {
       return { ok: true, tools: toolsList }
     }
 
-    async function mcpmList(): Promise<any> {
+    function levelLabel(target: PatchTarget): string {
+      return target.scope === 'global' ? '全局层' : 'profile "' + target.profileName + '"'
+    }
+    // scope: 'active' (default) | 'all' | 'profile:<name>'
+    function parseScope(raw: unknown): { kind: 'active' | 'all' | 'profile'; profileName: string | null } | { error: string } {
+      const s = typeof raw === 'string' ? raw.trim() : ''
+      if (!s || s === 'active') return { kind: 'active', profileName: null }
+      if (s === 'all') return { kind: 'all', profileName: null }
+      if (s.slice(0, 8) === 'profile:') {
+        const name = s.slice(8).trim()
+        if (!profileNameOk(name)) return { error: '非法的 profile 名: ' + (name || s) }
+        return { kind: 'profile', profileName: name }
+      }
+      return { error: '未知的查看范围: ' + s }
+    }
+    // Find the patch file that actually holds an entry id. `preferred` (what the
+    // caller said) is tried first, then the global patch, then every profile —
+    // an edit may move an entry it also has to find.
+    async function locateRow(id: string, preferred: PatchTarget): Promise<{ row: any; abs: string; target: PatchTarget } | null> {
       const p = await ensurePaths()
+      const tries: PatchTarget[] = [preferred]
+      const globalTarget: PatchTarget = { scope: 'global', profileName: null, abs: p.globalPatch, active: true }
+      if (!sameDir(preferred.abs, p.globalPatch)) tries.push(globalTarget)
+      for (const pf of await listProfiles(p)) {
+        const t: PatchTarget = { scope: 'profile', profileName: pf.name, abs: pf.patch, active: pf.active }
+        if (!tries.some((x) => sameDir(x.abs, t.abs))) tries.push(t)
+      }
+      for (const t of tries) {
+        let content = ''
+        try { content = await readPatch(t.abs) } catch (e) { continue }
+        const { rows } = parseRows(content)
+        const r = rows.find((x) => x.id === id)
+        if (r) return { row: normalizeRow(r, levelOf(t), t.abs), abs: t.abs, target: t }
+      }
+      return null
+    }
+
+    async function mcpmList(args: any = {}): Promise<any> {
+      const p = await ensurePaths()
+      const profiles = await listProfiles(p)
+      const scope = parseScope(args && args.scope)
+      if ('error' in scope) return { ok: false, error: scope.error }
+      // Which patch files are in view. The global patch is loaded by EVERY
+      // profile, so it is always listed alongside the selected profile(s).
+      const wanted: Array<{ level: string; abs: string; profileName: string | null; liveEligible: boolean }> = []
+      if (scope.kind === 'all') {
+        for (const pf of profiles) wanted.push({ level: 'profile:' + pf.name, abs: pf.patch, profileName: pf.name, liveEligible: pf.active })
+      } else if (scope.kind === 'profile') {
+        const pf = profiles.find((x) => x.name === scope.profileName)
+        if (!pf) return { ok: false, error: '未找到 profile "' + scope.profileName + '"' }
+        wanted.push({ level: 'profile:' + pf.name, abs: pf.patch, profileName: pf.name, liveEligible: pf.active })
+      } else {
+        wanted.push({ level: 'profile:' + p.profileName, abs: p.projectPatch, profileName: p.profileName, liveEligible: true })
+      }
+      wanted.push({ level: 'global', abs: p.globalPatch, profileName: null, liveEligible: true })
       const rows: any[] = []
       const errors: string[] = []
-      for (const level of ['project', 'global']) {
-        const abs = level === 'project' ? p.projectPatch : p.globalPatch
+      for (const w of wanted) {
         let content = ''
-        try { content = await readPatch(abs) } catch (e) { errors.push(level + ': ' + message(e)); continue }
+        try { content = await readPatch(w.abs) } catch (e) { errors.push(w.level + ': ' + message(e)); continue }
         const { rows: fileRows } = parseRows(content)
-        for (const r of fileRows) rows.push(normalizeRow(r, level, abs))
+        // liveEligible marks the files THIS instance loads; only those can carry
+        // loader state, tool counts or a restart action.
+        for (const r of fileRows) rows.push({ ...normalizeRow(r, w.level, w.abs), profileName: w.profileName, liveEligible: w.liveEligible })
       }
       const toolCounts: Record<string, number> = {}
       try {
@@ -1013,25 +1170,33 @@ export default {
       }
       for (const e of live) {
         const bid = bareEntryId(e.entryId)
-        const found = rows.find((r) => r.id === bid)
+        const found = rows.find((r) => r.id === bid && r.liveEligible)
         if (found) found.live = { enabled: e.enabled, phase: e.fiberPhase }
-        else rows.push({ id: e.entryId, serverName: e.entryId, transport: null, url: null, command: null, args: null, env: null, headers: null, level: 'loader', disabled: !e.enabled, managed: false, live: { enabled: e.enabled, phase: e.fiberPhase } })
+        else rows.push({ id: e.entryId, serverName: e.entryId, transport: null, url: null, command: null, args: null, env: null, headers: null, level: 'loader', disabled: !e.enabled, managed: false, profileName: p.profileName, liveEligible: true, live: { enabled: e.enabled, phase: e.fiberPhase } })
       }
       for (const row of rows) {
-        if (row.toolCount === undefined) row.toolCount = toolCounts[row.serverName] || 0
+        if (row.toolCount === undefined) row.toolCount = row.liveEligible ? (toolCounts[row.serverName] || 0) : 0
       }
-      return { ok: true, rows, paths: { project: p.projectPatch, global: p.globalPatch, home: p.home, profile: p.profileName }, errors }
+      return {
+        ok: true,
+        rows,
+        profiles: profiles.map((x) => ({ name: x.name, dir: x.dir, patch: x.patch, active: x.active })),
+        scope: scope.kind === 'profile' ? 'profile:' + scope.profileName : scope.kind,
+        paths: { project: p.projectPatch, global: p.globalPatch, home: p.home, profile: p.profileName },
+        errors,
+      }
     }
 
     async function mcpmAdd(args: any): Promise<any> {
-      const p = await ensurePaths()
       const serverName = String(args.serverName || '').trim()
       const transport = args.transport === 'stdio' ? 'stdio' : 'streamable-http'
-      const level = args.level === 'global' ? 'global' : 'project'
       if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) return { ok: false, error: 'serverName 需为 1-32 位 [A-Za-z0-9_-]' }
+      const t = await resolveTarget(args.level)
+      if (!t.ok) return { ok: false, error: t.error }
+      const target = t.target
       const baseId = 'mcp-' + serverName.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-      const existing = await collectAll()
-      if (existing.serverNames.has(serverName)) return { ok: false, error: 'serverName "' + serverName + '" 已存在' }
+      const existing = await collectNamespace(target)
+      if (existing.serverNames.has(serverName)) return { ok: false, error: 'serverName "' + serverName + '" 已在 ' + levelLabel(target) + ' 中存在' }
       let id = baseId
       let n = 2
       while (existing.ids.has(id)) { id = baseId + '-' + n; n++ }
@@ -1048,7 +1213,7 @@ export default {
         row.args = parseArgs(args.args)
         row.env = parseKv(args.env)
       }
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
+      const abs = target.abs
       return withWriteLock(async () => {
         let content = ''
         try { content = await readPatch(abs) } catch (e) { return { ok: false, error: '读取补丁失败: ' + message(e) } }
@@ -1059,22 +1224,30 @@ export default {
         } catch (e) {
           return { ok: false, error: '写入补丁失败: ' + message(e) }
         }
-        return { ok: true, row: { ...row, level, disabled: args.enabled === false } }
+        return { ok: true, row: { ...row, level: levelOf(target), disabled: args.enabled === false }, warning: restartHint(target) }
       })
     }
 
     async function mcpmEdit(args: any): Promise<any> {
-      const p = await ensurePaths()
       const id = String(args.id || '')
-      const level = args.level === 'global' ? 'global' : 'project'
       if (!id) return { ok: false, error: '缺少 id' }
-      const all = await collectAll()
-      const cur = all.rows.find((r) => r.id === id)
-      if (!cur) return { ok: false, error: '未找到条目 ' + id }
+      const t = await resolveTarget(args.level)
+      if (!t.ok) return { ok: false, error: t.error }
+      const target = t.target
+      // fromLevel names the patch the entry currently lives in (the UI sends the
+      // row's own level, which may differ from the level the user picked).
+      let fromLevel: unknown = args.fromLevel
+      if (fromLevel === undefined || fromLevel === null || fromLevel === '') fromLevel = args.level
+      const ft = await resolveTarget(fromLevel)
+      if (!ft.ok) return { ok: false, error: ft.error }
+      const loc = await locateRow(id, ft.target)
+      if (!loc) return { ok: false, error: '未找到条目 ' + id }
+      const cur = loc.row
       const serverName = String(args.serverName || '').trim()
       const transport = args.transport === 'stdio' ? 'stdio' : 'streamable-http'
       if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) return { ok: false, error: 'serverName 需为 1-32 位 [A-Za-z0-9_-]' }
-      if (serverName !== cur.serverName && all.serverNames.has(serverName)) return { ok: false, error: 'serverName "' + serverName + '" 已被其他服务占用' }
+      const ns = await collectNamespace(target)
+      if (serverName !== cur.serverName && ns.serverNames.has(serverName)) return { ok: false, error: 'serverName "' + serverName + '" 已被 ' + levelLabel(target) + ' 中的其他服务占用' }
       const row: any = { id, serverName, transport }
       if (transport === 'streamable-http') {
         const url = String(args.url || '').trim()
@@ -1088,11 +1261,19 @@ export default {
         row.args = parseArgs(args.args)
         row.env = parseKv(args.env)
       }
-      const oldAbs = cur.level === 'global' ? p.globalPatch : p.projectPatch
-      const newAbs = level === 'global' ? p.globalPatch : p.projectPatch
+      const oldAbs = loc.abs
+      const newAbs = target.abs
       const block = buildInsertBlock(row)
+      const notes: string[] = []
+      const targetHint = restartHint(target, '更新')
+      if (targetHint) notes.push(targetHint)
+      if (!sameDir(oldAbs, newAbs)) {
+        const sourceHint = restartHint(loc.target, '删除')
+        if (sourceHint) notes.push(sourceHint)
+      }
+      const warning = notes.length ? notes.join('；') : null
       return withWriteLock(async () => {
-        if (oldAbs !== newAbs) {
+        if (!sameDir(oldAbs, newAbs)) {
           // Level migration: remove from the old file, insert into the new one.
           // Not atomic, so keep the old content and restore it if the second
           // write fails — losing the entry is worse than a transient dup.
@@ -1120,17 +1301,19 @@ export default {
           if (cur.disabled) c = appendBlock(c, buildDisableBlock(id, true))
           await writePatch(newAbs, c)
         }
-        return { ok: true }
+        return { ok: true, warning }
       })
     }
 
     async function mcpmSetEnabled(args: any): Promise<any> {
-      const p = await ensurePaths()
       const { id, level } = args
       const enabled = !!args.enabled
-      if (!id || (level !== 'global' && level !== 'project')) return { ok: false, error: '缺少 id 或 level' }
-      if (!(await entryExists(id, level))) return { ok: false, error: '未找到条目 ' + id }
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
+      if (!id) return { ok: false, error: '缺少 id' }
+      const t = await resolveTarget(level)
+      if (!t.ok) return { ok: false, error: t.error }
+      const target = t.target
+      if (!(await entryExists(String(id), target))) return { ok: false, error: '未找到条目 ' + id }
+      const abs = target.abs
       return withWriteLock(async () => {
         let c = await readPatch(abs)
         if (enabled) {
@@ -1148,16 +1331,23 @@ export default {
           c = appendBlock(c, buildDisableBlock(id, true))
         }
         await writePatch(abs, c)
-        return { ok: true }
+        return { ok: true, warning: restartHint(target, '更新') }
       })
     }
 
     async function mcpmRestart(args: any): Promise<any> {
-      const p = await ensurePaths()
       const { id, level } = args
-      if (!id || (level !== 'global' && level !== 'project')) return { ok: false, error: '缺少 id 或 level' }
-      if (!(await entryExists(id, level))) return { ok: false, error: '未找到条目 ' + id }
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
+      if (!id) return { ok: false, error: '缺少 id' }
+      const t = await resolveTarget(level)
+      if (!t.ok) return { ok: false, error: t.error }
+      const target = t.target
+      if (!target.active) {
+        // The loader belongs to THIS instance: another profile's entries can only
+        // be restarted by that profile's own DSH instance.
+        return { ok: false, error: '重启只适用于当前实例加载的层级；profile "' + target.profileName + '" 的 MCP 服务请在其自身的 DSH 实例中重启' }
+      }
+      if (!(await entryExists(String(id), target))) return { ok: false, error: '未找到条目 ' + id }
+      const abs = target.abs
       return withWriteLock(async () => {
         let c = await readPatch(abs)
         c = removeMarked(c, id, 'enable')
@@ -1187,21 +1377,23 @@ export default {
     }
 
     async function mcpmRemove(args: any): Promise<any> {
-      const p = await ensurePaths()
       const { id, level } = args
-      if (!id || (level !== 'global' && level !== 'project')) return { ok: false, error: '缺少 id 或 level' }
-      const abs = level === 'global' ? p.globalPatch : p.projectPatch
+      if (!id) return { ok: false, error: '缺少 id' }
+      const t = await resolveTarget(level)
+      if (!t.ok) return { ok: false, error: t.error }
+      const target = t.target
+      const abs = target.abs
       return withWriteLock(async () => {
         let c = await readPatch(abs)
-        c = removeEntryAll(c, id)
+        c = removeEntryAll(c, String(id))
         await writePatch(abs, c)
-        return { ok: true }
+        return { ok: true, warning: restartHint(target, '删除') }
       })
     }
 
-    async function mcpmExport(): Promise<any> {
+    async function mcpmExport(args: any = {}): Promise<any> {
       const p = await ensurePaths()
-      const list = await mcpmList()
+      const list = await mcpmList({ scope: args && args.scope })
       const rows = (list.rows || []).filter((r: any) => r.level !== 'loader').map((r: any) => ({
         id: r.id,
         serverName: r.serverName,
@@ -1225,35 +1417,47 @@ export default {
     }
 
     async function mcpmImport(args: any): Promise<any> {
-      const p = await ensurePaths()
       let parsed: any = null
       try { parsed = JSON.parse(String(args.json || '')) } catch (e) { return { ok: false, error: 'JSON 解析失败: ' + message(e) } }
       const entries = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.rows) ? parsed.rows : null)
       if (!entries) return { ok: false, error: '导入内容格式不正确：需要数组或 { rows: [...] }' }
+      // Optional destination override: rows without their own level land here
+      // (default = the active profile).
+      const t = await resolveTarget(args.level)
+      if (!t.ok) return { ok: false, error: t.error }
+      const fallback = t.target
       const added: string[] = []
       const skipped: Array<{ id: string; reason: string }> = []
+      const notes: string[] = []
       for (const item of entries) {
         const norm = normalizeImportItem(item)
         if (!norm.ok) { skipped.push({ id: (item && (item.id || item.serverName)) || '?', reason: norm.error }); continue }
         const row = norm.row
+        const rt: { ok: true; target: PatchTarget } | { ok: false; error: string } =
+          row.level === 'project' ? { ok: true, target: fallback } : await resolveTarget(row.level)
+        if (!rt.ok) { skipped.push({ id: row.id, reason: rt.error }); continue }
+        const target = rt.target
         // Existence checks run INSIDE the write lock so two concurrent imports
         // (or an import racing an add) cannot both pass the same-id/same-name
         // check and duplicate rows (TOCTOU).
         const res = await withWriteLock(async () => {
-          const existing = await collectAll()
+          const existing = await collectNamespace(target)
           if (existing.ids.has(row.id)) return { skipped: true, reason: 'id 已存在' }
           if (existing.serverNames.has(row.serverName)) return { skipped: true, reason: 'serverName 已存在' }
-          const abs = row.level === 'global' ? p.globalPatch : p.projectPatch
+          const abs = target.abs
           let c = await readPatch(abs)
           c = appendBlock(c, buildInsertBlock(row))
           if (row.disabled) c = appendBlock(c, buildDisableBlock(row.id, true))
           await writePatch(abs, c)
           return { added: true }
         })
-        if (res.added) added.push(row.id)
-        else skipped.push({ id: row.id, reason: (res && res.reason) || '写入失败' })
+        if (res.added) {
+          added.push(row.id)
+          const h = restartHint(target)
+          if (h && notes.indexOf(h) < 0) notes.push(h)
+        } else skipped.push({ id: row.id, reason: (res && res.reason) || '写入失败' })
       }
-      return { ok: true, added, skipped }
+      return { ok: true, added, skipped, warning: notes.length ? notes.join('；') : null }
     }
 
     function parseKv(text: string): Record<string, string> {
@@ -1290,11 +1494,13 @@ export default {
     const text = (value: string) => [{ type: 'text' as const, text: value }]
     tools.register(defineTool({
       name: 'mcp_manager_list',
-      description: 'List all configured MCP servers (level, enabled state, live loader status, registered tool count).',
-      parameters: {},
+      description: "List configured MCP servers (level, enabled state, live loader status, registered tool count). Defaults to the active profile's patch plus the global layer, which every profile loads.",
+      parameters: {
+        scope: { type: 'string', description: "Which patch files to read: 'active' (default = active profile + global), 'all' (every profile + global), or 'profile:<name>'." },
+      },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
-      async execute() {
-        const r = await mcpmList()
+      async execute(args) {
+        const r = await mcpmList({ scope: args && args.scope })
         if (!r.ok) throw new Error(r.error)
         const summary = (r.rows || []).map((x: any) => (
           x.id + ' | ' + x.serverName + ' | ' + x.level + ' | ' + (x.disabled ? 'disabled' : 'enabled') +
@@ -1309,14 +1515,14 @@ export default {
       description: 'Enable or disable one configured MCP server (writes the patch file; takes effect via HMR).',
       parameters: {
         id: { type: 'string', required: true, description: 'Entry id of the MCP server, e.g. mcp-stepfun-web-search.' },
-        level: { type: 'string', required: true, description: 'project or global.' },
+        level: { type: 'string', required: true, description: "Entry level: 'global', 'profile:<name>', or 'project' (the active profile)." },
         enabled: { type: 'boolean', required: true, description: 'true to enable, false to disable.' },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
         const r = await mcpmSetEnabled({ id: args.id, level: args.level, enabled: args.enabled })
         if (!r.ok) throw new Error(r.error)
-        return 'OK: ' + args.id + ' now ' + (args.enabled ? 'enabled' : 'disabled')
+        return 'OK: ' + args.id + ' now ' + (args.enabled ? 'enabled' : 'disabled') + (r.warning ? ' | ' + r.warning : '')
       },
     }))
     tools.register(defineTool({
@@ -1324,18 +1530,18 @@ export default {
       description: 'Restart one configured MCP server (disable + re-enable; reconnect and re-sync tools).',
       parameters: {
         id: { type: 'string', required: true, description: 'Entry id of the MCP server, e.g. mcp-stepfun-web-search.' },
-        level: { type: 'string', required: true, description: 'project or global.' },
+        level: { type: 'string', required: true, description: "Entry level: 'global', 'profile:<name>', or 'project' (the active profile)." },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
         const r = await mcpmRestart({ id: args.id, level: args.level })
         if (!r.ok) throw new Error(r.error)
-        return 'OK: ' + args.id + ' restarted'
+        return 'OK: ' + args.id + ' restarted' + (r.warning ? ' | ' + r.warning : '')
       },
     }))
     tools.register(defineTool({
       name: 'mcp_manager_add',
-      description: 'Add a new MCP server (streamable-http or stdio) at project or global level.',
+      description: 'Add a new MCP server (streamable-http or stdio) to the active profile, to the global layer, or to another profile.',
       parameters: {
         serverName: { type: 'string', required: true, description: 'Unique server name (1-32 chars, [A-Za-z0-9_-]).' },
         transport: { type: 'string', required: true, description: 'streamable-http or stdio.' },
@@ -1344,13 +1550,13 @@ export default {
         args: { type: 'string', description: 'Arguments, space separated (stdio).' },
         headers: { type: 'string', description: 'Extra headers as key=value lines (streamable-http).' },
         env: { type: 'string', description: 'Extra env vars as key=value lines (stdio).' },
-        level: { type: 'string', description: 'project or global (default project).' },
+        level: { type: 'string', description: "Where to write it: 'global', 'profile:<name>', or 'project' (the active profile; default)." },
       },
       output: { schema: { type: 'string' }, render: (_a, v) => text(v) },
       async execute(args) {
         const r = await mcpmAdd(args)
         if (!r.ok) throw new Error(r.error)
-        return 'OK: added ' + r.row.id + ' at ' + r.row.level
+        return 'OK: added ' + r.row.id + ' at ' + r.row.level + (r.warning ? ' | ' + r.warning : '')
       },
     }))
 

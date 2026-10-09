@@ -3,9 +3,9 @@
 <!-- Hero -->
 <div align="center">
   <b style="font-size: 1.15em;">DeepSeek Harness 的 MCP 服务与技能管理器：装没装、连没连、一页管完。</b><br /><br />
-  <code>服务器列表</code> <code>新增 / 编辑 / 删除</code> <code>启用 / 停用</code> <code>重启</code> <code>工具数健康</code> <code>JSON 导出 / 导入</code><br />
+  <code>服务器列表</code> <code>新增 / 编辑 / 删除</code> <code>启用 / 停用</code> <code>重启</code> <code>工具数健康</code> <code>JSON 导出 / 导入</code> <code>任意 profile 写入</code><br />
   <code>Skills 浏览 / 搜索 / 停用</code> <code>4 个模型工具</code> <code>HTTP API</code> <code>dsh plugin 一条命令</code><br /><br />
-  <b>设置 → MCP 管理</b> 管理项目级与全局 <code>cordis.patch.yml</code> 中的 <code>@deepseek-ai/dsh-mcp-client</code> 行，<br />
+  <b>设置 → MCP 管理</b> 管理当前 profile、本机任意 profile 与全局层 <code>cordis.patch.yml</code> 中的 <code>@deepseek-ai/dsh-mcp-client</code> 行，<br />
   <b>设置 → Skills 管理</b> 浏览并停用各来源的技能——无需再手改配置文件，所有修改即改即生效（HMR 热应用），重启、升级后依然存在。
 </div>
 
@@ -35,11 +35,13 @@
 
 ## ✨ 功能一览
 
-- **📋 服务器列表**：列出所有已配置的 MCP 服务器（`@deepseek-ai/dsh-mcp-client` 实例）——`serverName`、传输方式（`stdio` / `streamable-http`）、URL / 命令、启用状态、loader 实时加载阶段、已注册工具数
+- **📋 服务器列表**：可用“查看范围”切换列表范围（当前 profile / 指定 profile / 全部 profile，全局层条目始终附带）；列出已配置的 MCP 服务器（`@deepseek-ai/dsh-mcp-client` 实例）——`serverName`、传输方式（`stdio` / `streamable-http`）、URL / 命令、启用状态、loader 实时加载阶段、已注册工具数
 - **➕ 新增 / ➖ 删除**：表单添加 MCP 服务器（支持 env / headers / args），带格式与重名校验；一键删除
 - **🔌 启用 / 停用**：随时切换，工具随之热连接 / 热断开
 - **🔄 重启**：disable + re-enable，自动重连并重新同步工具
-- **💾 持久化**：写入**项目级**（`profiles/<profile>/cordis.patch.yml`）或**全局**（`~/.dsh/cordis.patch.yml`），重启后保留；页面底部显示文件路径
+- **💾 持久化**：写入**任意 profile**（`~/.dsh/profiles/<name>/cordis.patch.yml`，默认当前活动 profile）或**全局层**（`~/.dsh/cordis.patch.yml`，对所有 profile 生效且优先级最高），重启后保留；页面底部显示文件路径
+- **🎯 动态 profile**：级别下拉自动枚举 `~/.dsh/profiles` 下的全部 profile（标注当前活动 profile）；写入非活动 profile 会提示“该 profile 需重启其 DSH 实例后生效”
+- **🎨 主题适配**：表单控件与原生下拉弹层跟随 DSH 深浅主题，切换主题后即时更新
 - **🩺 健康检查**：每台服务器实时工具数与 loader 阶段，异常一目了然
 - **📦 备份 / 恢复**：JSON 导出 / 导入，合并新增、已存在自动跳过
 - **🤖 模型工具**：宿主注册 4 个 `mcp_manager_*` 工具，模型可直接查询与操作 MCP 服务
@@ -121,7 +123,9 @@ dsh plugin --profile web remove @xxxyz/dsh-mcp-manager
 
 打开 **设置 → MCP 管理**：
 
-- **添加服务器**：填写 `serverName`（唯一，1–32 位 `[A-Za-z0-9_-]`）、传输方式及对应字段（`streamable-http` 填 URL / headers；`stdio` 填 command / args / env），选择级别（项目级 / 全局）。面板做格式与重名校验。
+- **添加服务器**：填写 `serverName`（唯一，1–32 位 `[A-Za-z0-9_-]`）、传输方式及对应字段（`streamable-http` 填 URL / headers；`stdio` 填 command / args / env），选择级别（默认当前 profile，可切换为本机任意 profile 或全局层）。面板做格式与重名校验。
+- **级别下拉**：自动列出 `~/.dsh/profiles` 下的全部 profile，当前活动 profile 置顶标注；写入非活动 profile 的条目不影响当前实例，页面提示“需重启该 profile 的 DSH 实例后生效”，且不提供重启 / 工具预览动作。
+- **查看范围**：切换列表显示当前 profile、某个指定 profile 或全部 profile（全局层条目始终附带）。
 - 每张卡片显示实时状态、连接目标与工具数；可 **启用 / 停用**、**重启**、**编辑**、**删除**。
 - **备份 / 恢复**：一键导出 JSON，或粘贴 JSON 导入（合并新增，已存在自动跳过）。
 - 页面底部显示正在编辑的补丁文件路径。
