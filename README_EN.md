@@ -36,16 +36,18 @@
 
 ## ✨ Features
 
-- **📋 Server list** — every configured MCP server (`@deepseek-ai/dsh-mcp-client` instance): `serverName`, transport (`stdio` / `streamable-http`), URL / command, enabled state, live loader phase, registered tool count
-- **➕ Add / ➖ Delete** — form-based (env / headers / args supported) with format and duplicate-name validation; one-click delete
+- **📋 Server list** — every configured MCP server (`@deepseek-ai/dsh-mcp-client` instance): `serverName`, transport (`stdio` / `streamable-http`), URL / command, enabled state, tool-call timeout, live loader phase, registered tool count
+- **➕ Add / ➖ Delete** — form-based (env / headers / args / tool-call timeout supported) with format and duplicate-name validation; one-click delete
+- **✏️ Inline edit** — clicking **edit** on a row expands the form **directly under that card** (auto-scrolled into view, row highlighted) instead of jumping back to the top of the list; saving collapses it and shows the new values
 - **🔌 Enable / Disable** — flip at any time, tools hot-connect / hot-disconnect
 - **🔄 Restart** — disable + re-enable, reconnect and re-sync tools automatically
+- **⏱️ Tool-call timeout** — set `toolCallTimeoutMs` per server (seconds, 1–3600) so slow tools stop being cut off by the fixed 60 s limit; 60 or an empty value follows the client default (nothing is written to the config file)
 - **💾 Persistence** — written to **any profile** (`~/.dsh/profiles/<name>/cordis.patch.yml`, the active profile by default) or to the **global layer** (`~/.dsh/cordis.patch.yml`, applied to every profile and taking precedence); survives restarts; the file path is shown at the bottom of the page
 - **🎯 Dynamic profiles** — the level dropdown enumerates every profile under `~/.dsh/profiles` and marks the active one; writing into a profile that is not running reports "restart that profile's DSH instance to take effect"
 - **🎨 Theme aware** — form controls and the native dropdown popup follow the DSH light / dark theme and update as soon as the theme switches
 - **🩺 Health check** — live tool counts and loader phase per server, problems visible at a glance
-- **📦 Backup / Restore** — JSON export / import; merges new entries, skips existing ones
-- **🤖 Model tools** — four `mcp_manager_*` tools registered on the host, so the model can query and manage MCP servers directly
+- **📦 Backup / Restore** — JSON export / import (including each server's tool-call timeout); merges new entries, skips existing ones
+- **🤖 Model tools** — four `mcp_manager_*` tools registered on the host, so the model can query and manage MCP servers directly (`mcp_manager_add` accepts `timeoutSeconds`)
 - **🧠 Skill management** — the **Settings → Skills 管理** page lists every DSH skill grouped by source (project / runtime / custom / user / built-in / plugin-bundled) with search and per-provider collapse; enable / disable any skill in one click (rank-0 override provider, so every source level including project-level is disable-able), persisted to `dsh-skill-manager.json`, applied live via HMR
 - **🌐 HTTP API** — `POST /dsh-mcp-manager/api` (JSON `{op, args}` → `{ok, ...}`) for the client and scripts. Cross-site (CSRF) protected: POST-only, requires the `x-dsh-plugin: dsh-mcp-manager` request header, and checks the Origin is same-origin (local scripts without an Origin are fine)
 - **📦 One-command install** — `dsh plugin --profile web add` installs and mounts automatically (Windows / macOS / Linux)
@@ -125,9 +127,11 @@ Then restart DSH.
 Open **Settings → MCP 管理**:
 
 - **Add a server**: enter `serverName` (unique, 1–32 chars of `[A-Za-z0-9_-]`), the transport and its fields (`streamable-http` → URL / headers; `stdio` → command / args / env), and the level (the active profile by default; any profile on this machine or the global layer can be chosen). The form validates format and duplicate names.
+- **Tool-call timeout**: the "工具调用超时（秒，1–3600）" field writes the DSH client's `toolCallTimeoutMs` (milliseconds, seconds × 1000); **60 or an empty value writes nothing** and follows the client default of 60 s. It covers **tool calls (`tools/call`) only** — connect / initialize / tools-list use the MCP SDK's own 60 s default, which no plugin config can change. Each list row shows the current value ("默认 60s（未写入配置）" when unset). See [Configuration → Tool-call timeout](#tool-call-timeout-toolcalltimeoutms) for the exact rules.
 - **Level dropdown**: lists every profile under `~/.dsh/profiles` with the active profile first. Entries written into a profile that is not running never affect the current instance; the page reports "restart that profile's DSH instance to take effect" and hides the restart / tool-preview actions for those rows.
 - **View scope**: switch the list between the active profile, one specific profile, or all profiles (global-layer entries are always included).
 - Each card shows live status, the connection target and the tool count; you can **enable / disable**, **restart**, **edit** and **delete**.
+- **Inline editing**: clicking **edit** on a row expands the form directly under that card (auto-scrolled into view, the row is highlighted) — no jumping back to the top of the list. Saving collapses it and shows the new values; cancelling writes nothing.
 - **Backup / Restore**: export the configuration as JSON with one click, or paste JSON to import (merges new entries, skips existing ones).
 - The file path being edited is shown at the bottom of the page.
 
@@ -159,6 +163,32 @@ The loader row must be an **`insert` block** (in DSH's patch dialect a plain `- 
 ```
 
 > You don't need to write this row manually — `dsh plugin add` inserts it automatically via the bundle patch (see `cordis.patch.yml`).
+
+### Tool-call timeout (`toolCallTimeoutMs`)
+
+Every MCP server can carry its own tool-call timeout. The plugin **always speaks seconds** (`timeoutSeconds`) and converts to the **milliseconds** the DSH client wants (`toolCallTimeoutMs`) only when writing the patch file. The settings form, the HTTP API (`mcpm-add` / `mcpm-edit`), the model tool (`mcp_manager_add`) and the export JSON all use seconds.
+
+| Case | Behavior |
+|---|---|
+| 1–3600 whole seconds | writes `toolCallTimeoutMs: <seconds × 1000>` |
+| 60, empty, or omitted on add | writes nothing — follows the DSH client default of **60000 ms** |
+| omitted on edit (e.g. only args changed) | keeps the stored value; never silently reset |
+| 60 or empty on edit | removes the field (same as following the default) |
+| out of range / not an integer (0, 3601, 1.5, abc) | rejected with an error; the patch file is left untouched |
+
+```yaml
+- insert:
+    - id: mcp-slow-tool
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: "slow-tool"
+        transport: "streamable-http"
+        url: "https://host/mcp"
+        toolCallTimeoutMs: 300000   # 300 seconds
+```
+
+> **Boundary (important)**: the field applies to **each `tools/call`** only. Connect / initialize / tools-list (`initialize`, `tools/list`) use the MCP SDK's own 60000 ms default, which neither the DSH client nor this plugin can configure — raising this value does not help when the failure happens during startup.
+> Export / import carries the value along: an unset entry exports as `null` and still writes nothing when imported, and older export files without the field keep working.
 
 ## 🏗️ Architecture
 
