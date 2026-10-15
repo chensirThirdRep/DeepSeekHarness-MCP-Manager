@@ -69,46 +69,12 @@ interface PluginInventoryService {
   list(): Promise<{ entries: PluginInventoryEntry[] }>
 }
 
-// ---------- Skills management types (minimal surface of ctx.skills) ----------
-interface SkillInvocation {
-  modelInvocable: boolean
-  userInvocable: boolean
-}
-interface SkillSummary {
-  name: string
-  description: string
-  whenToUse?: string
-  invocation: SkillInvocation
-  source: string
-  provider: string
-  resourceBase?: unknown
-  path?: string
-}
-interface SkillDefinition extends SkillSummary {
-  content: string
-  metadata?: unknown
-}
-interface SkillProviderControl {
-  signal: { aborted: boolean; addEventListener(type: string, fn: () => void, opts?: unknown): void }
-  invalidate(): void
-}
-interface SkillService {
-  registerProvider(create: (control: SkillProviderControl) => {
-    name: string
-    list(options?: unknown): Promise<SkillSummary[] | { candidates: SkillSummary[]; complete: boolean }>
-    get(candidate: SkillSummary, options?: unknown): Promise<SkillDefinition | undefined>
-  }): unknown
-  snapshot(options?: unknown): Promise<{ skills: SkillSummary[]; complete: boolean }>
-  get(name: string, options?: unknown): Promise<SkillDefinition | undefined>
-}
-
 interface DshContext extends Context {
   timer: unknown
   fs: FsService
   settings: SettingsService
   sandboxPolicy: SandboxPolicyService
   webServer: WebServerService
-  skills: SkillService
   timeout(delay: number): Promise<void>
 }
 
@@ -124,7 +90,7 @@ interface ManagedRow {
 
 export default {
   name: 'dsh-mcp-manager-host',
-  inject: ['timer', 'fs', 'settings', 'sandboxPolicy', 'webServer', 'tools', 'skills'],
+  inject: ['timer', 'fs', 'settings', 'sandboxPolicy', 'webServer', 'tools'],
   apply(ctx: DshContext, config?: Record<string, unknown>) {
     const fs = ctx.fs
     const settings = ctx.settings
@@ -145,7 +111,7 @@ export default {
     // setting `config.token` on this plugin's loader row (profile
     // cordis.patch.yml override) or the DSH_MCP_MANAGER_TOKEN env var. When
     // set, every state-changing op requires `x-dsh-token: <token>`. Read-only
-    // ops (plugin-version, mcpm-list, skill-list) stay open so the UI still
+    // ops (plugin-version, mcpm-list) stay open so the UI still
     // renders; mcpm-export is guarded too because it leaks full configs.
     // NOTE: the entry config arrives as the SECOND apply argument (Cordis
     // calls `callback(ctx, config)`) — never read it off `ctx.config`, which
@@ -154,7 +120,7 @@ export default {
     const TOKEN = String((config as { token?: unknown } | undefined)?.token || process.env.DSH_MCP_MANAGER_TOKEN || '').trim()
     const WRITE_OPS = new Set([
       'mcpm-add', 'mcpm-edit', 'mcpm-remove', 'mcpm-set-enabled', 'mcpm-restart',
-      'mcpm-export', 'mcpm-import', 'skill-toggle',
+      'mcpm-export', 'mcpm-import',
     ])
 
     const wait = (ms: number) => ctx.timeout(ms)
@@ -165,265 +131,6 @@ export default {
       const run = writeChain.then(() => fn(), () => fn())
       writeChain = run.then(() => undefined, () => undefined)
       return run
-    }
-
-    // ---------- skills management: list + enable/disable (rank-0 override provider) ----------
-    // A skill is disabled by advertising a same-name candidate with a rank lower
-    // than every real provider (project-dsh is 100; we use 0), so a user-explicit
-    // disable wins over any level — including project-level skills. State persists
-    // to <profile>/dsh-skill-manager.json and is re-applied lazily (providers may
-    // still be starting up when this plugin applies).
-    const OVERRIDE_PROVIDER = 'dsh-mcp-manager-override'
-    const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-    const overrideSkills = new Map<string, SkillDefinition>()
-    let skillProviderControl: SkillProviderControl | null = null
-
-    const statePath = async () => {
-      const p = await ensurePaths()
-      const s = p.profileDir.indexOf('\\') >= 0 ? '\\' : '/'
-      return p.profileDir + s + 'dsh-skill-manager.json'
-    }
-    async function readState(): Promise<string[]> {
-      try {
-        const raw = await fs.readText(await fs.resolve(await statePath()))
-        const data = JSON.parse(raw)
-        return Array.isArray(data.disabledSkills) ? data.disabledSkills.filter((n: unknown): n is string => typeof n === 'string') : []
-      } catch (e) {
-        return []
-      }
-    }
-    async function saveState(names: string[]): Promise<void> {
-      const policy = await sandboxPolicy.resolve({ mode: 'danger-full-access' })
-      await fs.writeText(await fs.resolve(await statePath()), JSON.stringify({ version: 1, disabledSkills: names }, null, 2), undefined, undefined, policy)
-    }
-
-    const overrideProvider = {
-      name: OVERRIDE_PROVIDER,
-      async list() {
-        return [...overrideSkills.values()].map((d) => ({
-          name: d.name,
-          description: d.description,
-          ...(d.whenToUse !== undefined ? { whenToUse: d.whenToUse } : {}),
-          invocation: d.invocation,
-          source: d.source,
-          provider: OVERRIDE_PROVIDER,
-          rank: 0,
-          ...(d.path !== undefined ? { path: d.path } : {}),
-          locator: d.name,
-        }))
-      },
-      async get(candidate: SkillSummary) {
-        return overrideSkills.get(candidate.name)
-      },
-    }
-    try {
-      ctx.skills.registerProvider((control) => {
-        skillProviderControl = control
-        return overrideProvider
-      })
-    } catch (e) {
-      console.error('[dsh-mcp-manager] skills override provider registration failed:', message(e))
-    }
-
-    async function ensureRestored(): Promise<void> {
-      let changed = false
-      for (const name of await readState()) {
-        if (overrideSkills.has(name)) continue
-        // Pre-2.2.2 migration: user-level skills are view-only now. Drop any
-        // stale state entry without touching the file — the sandbox blocks
-        // writing ~/.dsh/skills from a profile plugin, and an override could
-        // never shadow the scoped-layer filesystem entry anyway.
-        const userDef = await findUserSkill(name)
-        if (userDef) {
-          changed = true
-          continue
-        }
-        const def = await ctx.skills.get(name)
-        if (!def) continue
-        overrideSkills.set(name, { ...def, provider: OVERRIDE_PROVIDER, invocation: { modelInvocable: false, userInvocable: false } })
-        changed = true
-      }
-      if (changed) {
-        await saveState([...overrideSkills.keys()])
-        if (skillProviderControl) skillProviderControl.invalidate()
-      }
-    }
-    ;(ctx.on as (event: string, callback: () => void) => unknown)('skills/change', () => { void ensureRestored() })
-
-    // User-level skills (~/.dsh/skills/*/SKILL.md) are discovered by
-    // dsh-skill-filesystem in the agent-preset SCOPED layer, which a scope-less
-    // ctx.skills.snapshot({}) (global layer only) never reaches — so the
-    // management page would silently hide them. Scan the directory ourselves
-    // and merge into skill-list.
-    //
-    // Disable/enable is NOT offered for user skills: (a) a rank-0 override in
-    // the global layer cannot shadow the scoped layer's filesystem entry
-    // (collectFresh merges layers; the nearest layer wins); (b) writing the
-    // SKILL.md frontmatter is blocked by the fs sandbox (profile plugin,
-    // workspace-write mode — ~/.dsh/skills is outside its scope). Users
-    // disable such skills by editing `user-invocable: false` in the file
-    // directly. DSH_MCP_MANAGER_SKILLS_DIR overrides the directory for tests.
-    function userSkillsDir(home: string, sep: string): string {
-      const env = process.env.DSH_MCP_MANAGER_SKILLS_DIR
-      return env && env.trim() ? env.trim() : home + sep + 'skills'
-    }
-
-    // Minimal SKILL.md frontmatter reader that MIRRORS the official
-    // dsh-skill-filesystem parse rules (so this page never lists a skill the
-    // / menu would reject):
-    //   * `name` and `description` are REQUIRED (non-empty) — no dir-name fallback
-    //   * legacy camelCase keys (`userInvocable` / `modelInvocable`) are REJECTED
-    //   * booleans accept true/1/yes/on vs false/0/no/off (case-insensitive);
-    //     any other value invalidates the whole entry
-    // Returns null for anything the official provider would skip.
-    function parseFrontmatterBoolean(val: string): boolean | undefined {
-      const v = val.toLowerCase()
-      if (v === 'true' || v === '1' || v === 'yes' || v === 'on') return true
-      if (v === 'false' || v === '0' || v === 'no' || v === 'off') return false
-      return undefined
-    }
-    function parseSkillFile(raw: string): { fm: { name: string; description: string; whenToUse?: string; userInvocable?: boolean; disableModelInvocation?: boolean }; content: string } | null {
-      const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)
-      if (!m) return null
-      const fields = new Map<string, string>()
-      for (const line of m[1].split(/\r?\n/)) {
-        const kv = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line.trim())
-        if (!kv) continue
-        fields.set(kv[1], kv[2].trim().replace(/^['"]|['"]$/g, ''))
-      }
-      if (fields.has('userInvocable') || fields.has('modelInvocable')) return null
-      const name = fields.get('name')
-      const description = fields.get('description')
-      if (!name || description === undefined || description === '') return null
-      const fm: { name: string; description: string; whenToUse?: string; userInvocable?: boolean; disableModelInvocation?: boolean } = { name, description }
-      const wtu = fields.get('whenToUse') ?? fields.get('when-to-use')
-      if (wtu) fm.whenToUse = wtu
-      const ui = fields.get('user-invocable')
-      if (ui !== undefined) {
-        const b = parseFrontmatterBoolean(ui)
-        if (b === undefined) return null
-        fm.userInvocable = b
-      }
-      const dmi = fields.get('disable-model-invocation')
-      if (dmi !== undefined) {
-        const b = parseFrontmatterBoolean(dmi)
-        if (b === undefined) return null
-        fm.disableModelInvocation = b
-      }
-      const content = raw.slice(m[0].length).replace(/^\r?\n+/, '')
-      return { fm, content }
-    }
-
-    async function scanUserSkills(): Promise<SkillDefinition[]> {
-      let dir: string
-      let sep: string
-      try {
-        const p = await ensurePaths()
-        sep = p.home.indexOf('\\') >= 0 ? '\\' : '/'
-        dir = userSkillsDir(p.home, sep)
-      } catch (e) { return [] }
-      let entries: Array<{ name: string }> = []
-      try { entries = await fs.listDir(await fs.resolve(dir)) } catch (e) { return [] }
-      const rows: SkillDefinition[] = []
-      const seen = new Set<string>()
-      for (const ent of entries) {
-        const nm = String(ent.name || '')
-        if (!nm || nm === '.system') continue
-        // Official parity (dsh-skill-filesystem discoverRoot): a directory entry
-        // points at `<dir>/SKILL.md`; a flat `*.md` file in the root is itself a
-        // skill. We cannot stat entry types through the fs service, so try the
-        // directory form first and fall back to the flat form for `.md` names.
-        let path = dir + sep + nm + sep + 'SKILL.md'
-        let directory = dir + sep + nm
-        let raw = ''
-        try { raw = await fs.readText(await fs.resolve(path)) } catch (e) {
-          if (!nm.endsWith('.md')) continue
-          path = dir + sep + nm
-          directory = dir
-          try { raw = await fs.readText(await fs.resolve(path)) } catch (e2) { continue }
-        }
-        const parsed = parseSkillFile(raw)
-        if (!parsed) {
-          console.warn(`[dsh-mcp-manager] user skill ${path} ignored: missing/invalid frontmatter (name+description required, kebab-case name, official boolean grammar)`)
-          continue
-        }
-        const { fm, content } = parsed
-        if (!SKILL_NAME_RE.test(fm.name)) continue
-        if (seen.has(fm.name)) continue
-        seen.add(fm.name)
-        rows.push({
-          name: fm.name,
-          description: fm.description,
-          ...(fm.whenToUse !== undefined ? { whenToUse: fm.whenToUse } : {}),
-          invocation: { modelInvocable: fm.disableModelInvocation !== true, userInvocable: fm.userInvocable !== false },
-          source: 'user-dsh',
-          provider: 'filesystem',
-          resourceBase: { kind: 'directory', path: directory },
-          path,
-          content,
-        })
-      }
-      return rows
-    }
-
-    async function findUserSkill(name: string): Promise<SkillDefinition | undefined> {
-      return (await scanUserSkills()).find((s) => s.name === name)
-    }
-
-    async function skillList() {
-      await ensureRestored()
-      const snap = await ctx.skills.snapshot({})
-      const seen = new Set(snap.skills.map((s) => s.name))
-      const extra = (await scanUserSkills()).filter((s) => !seen.has(s.name))
-      const skills = snap.skills.concat(extra).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-      return { ok: true, skills, complete: snap.complete !== false }
-    }
-    // User-level skills (~/.dsh/skills) are VIEW-ONLY in this page. They are
-    // discovered by dsh-skill-filesystem in the agent-preset SCOPED layer; a
-    // scope-less snapshot({}) (global layer only) never sees them, so we scan
-    // the directory and merge rows into skill-list. Disable/enable is NOT
-    // supported for them: (a) the rank-0 override provider lives in the global
-    // layer and a scoped read merges the scope chain with the scoped entry
-    // winning the duplicate name outright (collectFresh last-wins), so an
-    // override cannot hide them from the / menu; (b) rewriting the SKILL.md
-    // frontmatter is blocked by the fs sandbox (profile plugin, workspace-write
-    // mode — ~/.dsh/skills is outside its scope). Users disable such skills by
-    // editing `user-invocable: false` in the file directly.
-    const USER_SKILL_VIEW_ONLY_ERROR = '用户级技能由 DSH 文件系统管理，仅支持查看；如需禁用请直接编辑 SKILL.md 的 user-invocable 字段'
-    async function skillToggle(args: { name?: string; enabled?: boolean }) {
-      const name = String(args.name || '').trim()
-      if (!name) return { ok: false, error: '技能名不能为空' }
-      if (!SKILL_NAME_RE.test(name)) return { ok: false, error: '技能名格式非法（需 kebab-case）' }
-      await ensureRestored()
-      const enabled = args.enabled !== false
-      return withWriteLock(async () => {
-        const userDef = await findUserSkill(name)
-        if (userDef) {
-          // Drop any stale override row created by older versions (pre-2.2.2
-          // migration) — it can never shadow the scoped entry anyway, and the
-          // toggle for user skills is not supported.
-          if (overrideSkills.delete(name)) {
-            await saveState([...overrideSkills.keys()])
-            skillProviderControl?.invalidate()
-          }
-          return { ok: false, error: USER_SKILL_VIEW_ONLY_ERROR }
-        }
-        if (enabled) {
-          if (overrideSkills.delete(name)) {
-            await saveState([...overrideSkills.keys()])
-            skillProviderControl?.invalidate()
-          }
-        } else {
-          if (!overrideSkills.has(name)) {
-            const def = await ctx.skills.get(name)
-            if (!def) return { ok: false, error: '技能不存在: ' + name }
-            overrideSkills.set(name, { ...def, provider: OVERRIDE_PROVIDER, invocation: { modelInvocable: false, userInvocable: false } })
-            await saveState([...overrideSkills.keys()])
-            skillProviderControl?.invalidate()
-          }
-        }
-        return { ok: true }
-      })
     }
 
     // ---------- path discovery ----------
@@ -1548,8 +1255,6 @@ export default {
       'mcpm-remove': mcpmRemove,
       'mcpm-export': mcpmExport,
       'mcpm-import': mcpmImport,
-      'skill-list': skillList,
-      'skill-toggle': skillToggle,
     }
 
     // ---------- agent-facing tools (standard ctx.tools.register + defineTool) ----------

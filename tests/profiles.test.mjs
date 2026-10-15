@@ -64,11 +64,6 @@ function makeCtx(home, opts) {
       const patchPath = join(activeDir, 'cordis.patch.yml')
       return { name: opts.active, dir: activeDir, patchPath, home }
     },
-    skills: {
-      registerProvider() {},
-      async snapshot() { return { skills: [], complete: true } },
-      async get() { return undefined },
-    },
     _files: files,
     _route: () => route,
   }

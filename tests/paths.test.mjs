@@ -41,11 +41,6 @@ function makeCtx(home, opts = {}) {
     on() {},
     events: { dispatch: () => [] },
     get(name) { return opts.services ? opts.services[name] : undefined },
-    skills: {
-      registerProvider() {},
-      async snapshot() { return { skills: [], complete: true } },
-      async get() { return undefined },
-    },
     _files: files,
     _route: () => route,
   }

@@ -2,12 +2,12 @@
 
 <!-- Hero -->
 <div align="center">
-  <b style="font-size: 1.15em;">Manage every MCP server and skill in DeepSeek Harness from one settings page — install, configure, monitor.</b><br /><br />
+  <b style="font-size: 1.15em;">Manage every MCP server in DeepSeek Harness from one settings page — install, configure, monitor.</b><br /><br />
   <code>server list</code> <code>add / edit / delete</code> <code>enable / disable</code> <code>restart</code> <code>tool-count health</code> <code>JSON export / import</code> <code>any-profile writes</code><br />
-  <code>Skills browse / search / disable</code> <code>4 model tools</code> <code>HTTP API</code> <code>dsh plugin one-command</code><br /><br />
+  <code>4 model tools</code> <code>HTTP API</code> <code>dsh plugin one-command</code><br /><br />
   <b>Settings → MCP 管理</b> manages <code>@deepseek-ai/dsh-mcp-client</code> rows in the active profile, in any other
-  profile on this machine, and in the global <code>cordis.patch.yml</code>; <b>Settings → Skills 管理</b> browses and disables skills from every
-  source — no hand-editing, every change applies live via HMR, survives restarts and upgrades.
+  profile on this machine, and in the global <code>cordis.patch.yml</code> — no hand-editing,
+  every change applies live via HMR, survives restarts and upgrades.
 </div>
 
 <div align="center">
@@ -48,7 +48,6 @@
 - **🩺 Health check** — live tool counts and loader phase per server, problems visible at a glance
 - **📦 Backup / Restore** — JSON export / import (including each server's tool-call timeout); merges new entries, skips existing ones
 - **🤖 Model tools** — four `mcp_manager_*` tools registered on the host, so the model can query and manage MCP servers directly (`mcp_manager_add` accepts `timeoutSeconds`)
-- **🧠 Skill management** — the **Settings → Skills 管理** page lists every DSH skill grouped by source (project / runtime / custom / user / built-in / plugin-bundled) with search and per-provider collapse; enable / disable any skill in one click (rank-0 override provider, so every source level including project-level is disable-able), persisted to `dsh-skill-manager.json`, applied live via HMR
 - **🌐 HTTP API** — `POST /dsh-mcp-manager/api` (JSON `{op, args}` → `{ok, ...}`) for the client and scripts. Cross-site (CSRF) protected: POST-only, requires the `x-dsh-plugin: dsh-mcp-manager` request header, and checks the Origin is same-origin (local scripts without an Origin are fine)
 - **📦 One-command install** — `dsh plugin --profile web add` installs and mounts automatically (Windows / macOS / Linux)
 
@@ -105,9 +104,8 @@ Or bump the version in `~/.dsh/profiles/web/package.json` and run `pnpm install`
 | `dsh: command not found` | Install DSH first, or use `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add @xxxyz/dsh-mcp-manager@latest`. |
 | `npm view` reports 404 | Local mirror (npmmirror) sync lag: add `--registry=https://registry.npmjs.org` or wait a moment. |
 | Config changes don't take effect | All changes apply via HMR within 1–2 s; the page auto-polls. |
-| `dsh: installation rejected: Plugin @xxxyz/dsh-mcp-manager@2.2.7 is incompatible with dsh 0.2.0-rc.2` | The plugin and DSH versions do not match: use `@2.2.x` on DSH 0.1.x and `@2.3.0`+ on DSH 0.2.x. Do **not** grant an `allow-version` exemption to the old release: 2.2.7 writes MCP config into the wrong profile file on 0.2.x and shows an incomplete skill list. |
+| `dsh: installation rejected: Plugin @xxxyz/dsh-mcp-manager@2.2.7 is incompatible with dsh 0.2.0-rc.2` | The plugin and DSH versions do not match: use `@2.2.x` on DSH 0.1.x and `@2.3.0`+ on DSH 0.2.x. Do **not** grant an `allow-version` exemption to the old release: 2.2.7 writes MCP config into the wrong profile file on 0.2.x. |
 | After upgrading DSH to 0.2.x the paths/list in "MCP 管理" look wrong (writes go to the web profile, only `include:` rows are listed) | 2.2.7 guessed the DSH home from `settings.prepareDocument()`, whose semantics changed in 0.2.0. 2.3.0 reads the runtime `profileContext` instead, so paths always follow the active profile. Upgrade to `@2.3.0`. |
-| My own skills are missing from the list | User-level skills come from `~/.dsh/skills` and are grouped under the `user-dsh` source. They are **view-only**; to disable one, edit `user-invocable` in its `SKILL.md`. |
 
 </details>
 
@@ -135,12 +133,6 @@ Open **Settings → MCP 管理**:
 - **Backup / Restore**: export the configuration as JSON with one click, or paste JSON to import (merges new entries, skips existing ones).
 - The file path being edited is shown at the bottom of the page.
 
-Open **Settings → Skills 管理**:
-
-- **Browse / Search**: lists every DSH skill grouped by source (project / runtime / custom / user / built-in / plugin-bundled), collapsed per provider; the search box filters live. User-level skills under `~/.dsh/skills/` (2.2.0+) are listed too — even though the official scoped layer never exposes them to scope-less queries.
-- **Enable / Disable**: toggle a skill in one click — implemented with a rank-0 override provider (`dsh-mcp-manager-override`). User-level (`user-dsh`) skills are owned by the DSH filesystem and are **view-only**: to disable one, edit `user-invocable` in its `SKILL.md`.
-- **Persistence**: disabled state is written to `<profileDir>/dsh-skill-manager.json`, survives restarts, and applies live via HMR.
-
 ## ⚙️ Configuration
 
 Configuration of the plugin itself on its loader row:
@@ -148,7 +140,7 @@ Configuration of the plugin itself on its loader row:
 | Field | Description |
 |---|---|
 | `version` | The loader row's `config.version`, only used to trigger an HMR re-apply; auto-managed by the bundle channel — no manual edits needed. |
-| `token` | **Optional** access token (write-op auth, defense in depth). When set, state-changing ops (add/edit/remove/enable/restart/import/export/skill-toggle) require the `x-dsh-token: <token>` header; the settings pages provide a token input (stored in browser localStorage). Can also be set via the `DSH_MCP_MANAGER_TOKEN` env var. Off by default. |
+| `token` | **Optional** access token (write-op auth, defense in depth). When set, state-changing ops (add/edit/remove/enable/restart/import/export) require the `x-dsh-token: <token>` header; the settings pages provide a token input (stored in browser localStorage). Can also be set via the `DSH_MCP_MANAGER_TOKEN` env var. Off by default. |
 
 > **Why is the token needed?** The plugin's CSRF protection only blocks *cross-site browser* requests — it assumes DSH web listens on localhost (`127.0.0.1`) only. Once you expose port 3080 to a LAN or the public internet (port forwarding, a `dsh-web-lan-access`-style plugin, or a reverse proxy), **anyone who can reach the port gets full write access**: they can add/modify MCP servers, and a `stdio` server's `command` field accepts any executable — i.e. **remote arbitrary code execution**. The token is the last gate for exactly this exposure scenario: without the secret, no write op succeeds even when the port is exposed, so commands cannot be injected. Local single-machine use does not need it.
 

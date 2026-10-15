@@ -8,9 +8,9 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import plugin from '../lib/index.js'
 
-// Fake Cordis ctx exposing exactly the surfaces the plugin touches. Same shape
-// as skills.test.mjs, extended with `config` for the token gate and
-// `tools.schemas` for the live tool-count in mcpm-list.
+// Fake Cordis ctx exposing exactly the surfaces the plugin touches,
+// extended with `config` for the token gate and `tools.schemas` for the
+// live tool-count in mcpm-list.
 function makeCtx(home, files, config) {
   files = files || new Map()
   if (!files.has(join(home, 'settings.yaml'))) files.set(join(home, 'settings.yaml'), '')
@@ -39,11 +39,6 @@ function makeCtx(home, files, config) {
     on(ev, cb) { listeners.set(ev, cb) },
     events: { dispatch: () => [] },
     get() { return undefined },
-    skills: {
-      registerProvider() {},
-      async snapshot() { return { skills: [], complete: true } },
-      async get() { return undefined },
-    },
     config,
     _files: files,
     _route: () => route,

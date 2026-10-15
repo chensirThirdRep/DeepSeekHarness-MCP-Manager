@@ -2,11 +2,10 @@
 
 <!-- Hero -->
 <div align="center">
-  <b style="font-size: 1.15em;">DeepSeek Harness 的 MCP 服务与技能管理器：装没装、连没连、一页管完。</b><br /><br />
+  <b style="font-size: 1.15em;">DeepSeek Harness 的 MCP 服务管理器：装没装、连没连、一页管完。</b><br /><br />
   <code>服务器列表</code> <code>新增 / 编辑 / 删除</code> <code>启用 / 停用</code> <code>重启</code> <code>工具数健康</code> <code>JSON 导出 / 导入</code> <code>任意 profile 写入</code><br />
-  <code>Skills 浏览 / 搜索 / 停用</code> <code>4 个模型工具</code> <code>HTTP API</code> <code>dsh plugin 一条命令</code><br /><br />
-  <b>设置 → MCP 管理</b> 管理当前 profile、本机任意 profile 与全局层 <code>cordis.patch.yml</code> 中的 <code>@deepseek-ai/dsh-mcp-client</code> 行，<br />
-  <b>设置 → Skills 管理</b> 浏览并停用各来源的技能——无需再手改配置文件，所有修改即改即生效（HMR 热应用），重启、升级后依然存在。
+  <code>4 个模型工具</code> <code>HTTP API</code> <code>dsh plugin 一条命令</code><br /><br />
+  <b>设置 → MCP 管理</b> 管理当前 profile、本机任意 profile 与全局层 <code>cordis.patch.yml</code> 中的 <code>@deepseek-ai/dsh-mcp-client</code> 行——所有修改即改即生效（HMR 热应用），重启、升级后依然存在。
 </div>
 
 <div align="center">
@@ -47,7 +46,6 @@
 - **🩺 健康检查**：每台服务器实时工具数与 loader 阶段，异常一目了然
 - **📦 备份 / 恢复**：JSON 导出 / 导入（含每台服务器的工具调用超时），合并新增、已存在自动跳过
 - **🤖 模型工具**：宿主注册 4 个 `mcp_manager_*` 工具，模型可直接查询与操作 MCP 服务（`mcp_manager_add` 支持 `timeoutSeconds`）
-- **🧠 技能管理**：**设置 → Skills 管理** 页列出 DSH 全部技能，按来源分组（项目级 / 运行时 / 自定义 / 用户级 / 内置 / 插件自带）并支持搜索与按 provider 折叠；一键停用 / 启用任意技能（rank-0 override provider，任何来源层级都可禁），状态持久化到 `dsh-skill-manager.json`，HMR 即时生效
 - **🌐 HTTP API**：`POST /dsh-mcp-manager/api`（JSON `{op, args}` → `{ok, ...}`），供客户端与脚本调用。带跨站（CSRF）防护：仅接受 POST、必须携带 `x-dsh-plugin: dsh-mcp-manager` 请求头、校验同源 Origin（curl 等本地脚本无需 Origin）
 - **📦 一键安装**：`dsh plugin --profile web add` 一条命令装包 + 自动挂载（Windows / macOS / Linux）
 
@@ -104,9 +102,8 @@ dsh plugin --profile web add @xxxyz/dsh-mcp-manager@latest
 | 提示 `dsh: command not found` | 先安装 DSH；或直接用 `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add @xxxyz/dsh-mcp-manager@latest`。 |
 | `npm view` 报 404 | 国内镜像（npmmirror）同步有延迟：加 `--registry=https://registry.npmjs.org` 或稍等再试。 |
 | 修改配置后未生效 | 所有修改走 HMR 热应用，等 1–2 秒自动刷新；页面会自动轮询。 |
-| 安装报 `dsh: installation rejected: Plugin @xxxyz/dsh-mcp-manager@2.2.7 is incompatible with dsh 0.2.0-rc.2` | 插件版本与 DSH 版本不匹配：DSH 0.1.x 用 `@2.2.x`，DSH 0.2.x 用 `@2.3.0` 及以上。**不要**用 `allow-version` 豁免旧版：2.2.7 在 0.2.x 下会把 MCP 配置写到错误的 profile 文件、技能列表也不完整。 |
+| 安装报 `dsh: installation rejected: Plugin @xxxyz/dsh-mcp-manager@2.2.7 is incompatible with dsh 0.2.0-rc.2` | 插件版本与 DSH 版本不匹配：DSH 0.1.x 用 `@2.2.x`，DSH 0.2.x 用 `@2.3.0` 及以上。**不要**用 `allow-version` 豁免旧版：2.2.7 在 0.2.x 下会把 MCP 配置写到错误的 profile 文件。 |
 | DSH 升到 0.2.x 后「MCP 管理」里路径/列表不对（写进了 web profile、只列出 `include:` 行） | 2.2.7 依赖 `settings.prepareDocument()` 猜 DSH 主目录，0.2.0 改了该接口语义。2.3.0 改为读取运行时 `profileContext`，路径始终对准当前活动 profile；升级到 `@2.3.0` 即可。 |
-| 技能列表里少了自己的技能 | 用户级技能来自 `~/.dsh/skills`；列表按来源分组显示（用户级标记为 `user-dsh`）。用户级技能**只读**，要停用请直接改 `SKILL.md` 的 `user-invocable`。 |
 
 </details>
 
@@ -134,12 +131,6 @@ dsh plugin --profile web remove @xxxyz/dsh-mcp-manager
 - **备份 / 恢复**：一键导出 JSON，或粘贴 JSON 导入（合并新增，已存在自动跳过）。
 - 页面底部显示正在编辑的补丁文件路径。
 
-打开 **设置 → Skills 管理**：
-
-- **浏览 / 搜索**：列出 DSH 全部技能，按来源分组（项目级 / 运行时 / 自定义 / 用户级 / 内置 / 插件自带），组内按 provider 折叠；搜索框实时过滤。`~/.dsh/skills/` 下的用户级技能（2.2.0+）同样可见——即使官方 scoped 层不向无 scope 查询暴露它们。
-- **启用 / 停用**：一键切换技能启用状态——通过 rank-0 override provider（`dsh-mcp-manager-override`）实现。用户级（`user-dsh`）技能由 DSH 文件系统管理，**仅支持查看**：如需停用请直接编辑其 `SKILL.md` 的 `user-invocable` 字段。
-- **持久化**：停用状态写入 `<profileDir>/dsh-skill-manager.json`，重启后保留；改动经 HMR 即时生效。
-
 ## ⚙️ 配置
 
 插件自身在 loader 行中的配置：
@@ -147,7 +138,7 @@ dsh plugin --profile web remove @xxxyz/dsh-mcp-manager
 | 字段 | 说明 |
 |---|---|
 | `version` | loader 行 `config.version`，仅用于触发 HMR 重应用；官方通道安装下由 bundle 自动管理，无需手动修改。 |
-| `token` | **可选**访问令牌（写操作鉴权，纵深防御）。设置后写操作（增删改/启停/重启/导入导出/技能停用）须带 `x-dsh-token: <token>` 头；设置页提供令牌输入框（保存在浏览器 localStorage）。也可用环境变量 `DSH_MCP_MANAGER_TOKEN` 配置。默认关闭。 |
+| `token` | **可选**访问令牌（写操作鉴权，纵深防御）。设置后写操作（增删改/启停/重启/导入导出）须带 `x-dsh-token: <token>` 头；设置页提供令牌输入框（保存在浏览器 localStorage）。也可用环境变量 `DSH_MCP_MANAGER_TOKEN` 配置。默认关闭。 |
 
 > **为什么需要 token？** 插件的 CSRF 防护只拦"跨站浏览器请求"——它假设 DSH web 只监听本机（`127.0.0.1`）。一旦你通过端口转发、`dsh-web-lan-access` 类插件或反向代理把 3080 端口暴露到局域网/公网，**任何能访问该端口的人都直接获得完整写权限**：可以新增/修改 MCP 服务器，而 `stdio` 服务的 `command` 字段可填任意可执行文件——等同于**远程任意代码执行**。token 就是为这种暴露场景加的最后一道闸：没有密钥就无法做任何写操作，即使端口被暴露也不能注入命令。本地单机使用不需要配置。
 
